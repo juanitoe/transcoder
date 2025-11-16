@@ -567,10 +567,11 @@ func (m *Model) refreshData() {
 		m.errorMsg = fmt.Sprintf("Failed to get queued jobs: %v", err)
 	}
 
-	// Get recent jobs (limited)
-	// Note: We'll need to add a GetRecentJobs method to the database
-	// For now, combine active and some completed jobs
-	m.recentJobs = m.activeJobs
+	// Get recent completed/failed jobs for history view
+	m.recentJobs, err = m.db.GetCompletedJobs(100)
+	if err != nil {
+		m.errorMsg = fmt.Sprintf("Failed to get completed jobs: %v", err)
+	}
 
 	m.lastUpdate = time.Now()
 }

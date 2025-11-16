@@ -485,6 +485,31 @@ func (db *DB) GetActiveJobs() ([]*types.TranscodeJob, error) {
 	return jobs, rows.Err()
 }
 
+// GetCompletedJobs returns completed and failed jobs, most recent first
+func (db *DB) GetCompletedJobs(limit int) ([]*types.TranscodeJob, error) {
+	rows, err := db.conn.Query(`
+		SELECT * FROM transcode_jobs
+		WHERE status IN ('completed', 'failed', 'canceled')
+		ORDER BY transcode_completed_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*types.TranscodeJob
+	for rows.Next() {
+		job, err := db.scanTranscodeJobRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+
+	return jobs, rows.Err()
+}
+
 // GetStatistics computes aggregate statistics
 func (db *DB) GetStatistics() (*types.Statistics, error) {
 	stats := &types.Statistics{}

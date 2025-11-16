@@ -126,14 +126,15 @@ func (m Model) renderDashboard() string {
 			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
 
 			activeJobsStr += fmt.Sprintf(
-				"%s  %s\n"+
-				"    %s\n"+
-				"    Stage: %s | %s\n\n",
-				statusColor.Render(string(job.Status)),
-				job.FileName,
-				formatProgress(job.Progress),
+				"Job #%d  %s\n"+
+				"    %s: %s | %s\n"+
+				"    %s\n\n",
+				job.ID,
+				truncateString(job.FileName, 40),
 				job.Stage,
+				statusColor.Render(string(job.Status)),
 				job.WorkerID,
+				formatProgress(job.Progress),
 			)
 		}
 	}
@@ -426,18 +427,18 @@ func (m Model) renderHelp() string {
 
 // renderLogs renders the logs view with scrolling (newest first)
 func (m Model) renderLogs() string {
-	content := "📝 Application Logs\n\n"
+	title := "📝 Application Logs\n\n"
 
 	if len(m.logs) == 0 {
-		content += statusStyle.Render("No logs yet")
-		return boxStyle.Render(content)
+		content := title + statusStyle.Render("No logs yet")
+		return boxStyle.Width(m.width - 4).Render(content)
 	}
 
 	// Calculate how many logs we can display based on available height
-	// Approximate: 2 lines for title, 2 for box borders, 3 for footer/header
-	availableHeight := m.height - 7
-	if availableHeight < 1 {
-		availableHeight = 10 // Fallback minimum
+	// Account for: header (3), footer (3), title (2), box padding/borders (6), scroll indicator (2)
+	availableHeight := m.height - 16
+	if availableHeight < 5 {
+		availableHeight = 5 // Fallback minimum
 	}
 
 	// Calculate the window of logs to display based on scroll offset
@@ -459,9 +460,16 @@ func (m Model) renderLogs() string {
 		startIdx = max(0, totalLogs-availableHeight)
 	}
 
-	// Display log entries in reverse order (newest first)
+	// Build log content
+	var logLines []string
 	for i := endIdx - 1; i >= startIdx; i-- {
 		logEntry := m.logs[totalLogs-1-i]
+
+		// Truncate long log lines to fit width
+		maxLogWidth := m.width - 12 // Account for box borders and padding
+		if len(logEntry) > maxLogWidth {
+			logEntry = logEntry[:maxLogWidth-3] + "..."
+		}
 
 		// Color code based on log level
 		var style lipgloss.Style
@@ -475,12 +483,14 @@ func (m Model) renderLogs() string {
 			style = statusStyle
 		}
 
-		content += style.Render(logEntry) + "\n"
+		logLines = append(logLines, style.Render(logEntry))
 	}
+
+	content := title + strings.Join(logLines, "\n")
 
 	// Add scroll indicator
 	if totalLogs > availableHeight {
-		scrollInfo := fmt.Sprintf("\n%s (Showing %d-%d of %d logs - newest first)",
+		scrollInfo := fmt.Sprintf("\n\n%s (Showing %d-%d of %d logs - newest first)",
 			helpStyle.Render("↑/↓ to scroll"),
 			startIdx+1,
 			endIdx,
@@ -489,7 +499,10 @@ func (m Model) renderLogs() string {
 		content += scrollInfo
 	}
 
-	return boxStyle.Render(content)
+	return boxStyle.
+		Width(m.width - 4).
+		MaxHeight(m.height - 8).
+		Render(content)
 }
 
 func max(a, b int) int {
