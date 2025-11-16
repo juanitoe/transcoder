@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbarbezat/transcoder/internal/config"
+	"transcoder/internal/config"
 )
 
 // Encoder handles video transcoding with FFmpeg

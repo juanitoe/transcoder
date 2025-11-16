@@ -8,7 +8,7 @@ import (
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 
-	"github.com/jbarbezat/transcoder/internal/types"
+	"transcoder/internal/types"
 )
 
 // DB represents the database connection

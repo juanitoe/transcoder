@@ -5,9 +5,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/jbarbezat/transcoder/internal/database"
-	"github.com/jbarbezat/transcoder/internal/scanner"
-	"github.com/jbarbezat/transcoder/internal/transcode"
+	"transcoder/internal/database"
+	"transcoder/internal/scanner"
+	"transcoder/internal/transcode"
 )
 
 // Messages

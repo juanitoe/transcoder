@@ -7,11 +7,11 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/jbarbezat/transcoder/internal/config"
-	"github.com/jbarbezat/transcoder/internal/database"
-	"github.com/jbarbezat/transcoder/internal/scanner"
-	"github.com/jbarbezat/transcoder/internal/transcode"
-	"github.com/jbarbezat/transcoder/internal/types"
+	"transcoder/internal/config"
+	"transcoder/internal/database"
+	"transcoder/internal/scanner"
+	"transcoder/internal/transcode"
+	"transcoder/internal/types"
 )
 
 // ViewMode represents different TUI screens

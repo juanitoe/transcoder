@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/jbarbezat/transcoder/internal/types"
+	"transcoder/internal/types"
 )
 
 // renderHeader renders the top header bar

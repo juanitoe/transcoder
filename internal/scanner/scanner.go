@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbarbezat/transcoder/internal/config"
-	"github.com/jbarbezat/transcoder/internal/database"
-	"github.com/jbarbezat/transcoder/internal/types"
+	"transcoder/internal/config"
+	"transcoder/internal/database"
+	"transcoder/internal/types"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbarbezat/transcoder/internal/types"
+	"transcoder/internal/types"
 )
 
 // FFprobeOutput represents the JSON output from ffprobe

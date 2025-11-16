@@ -1,4 +1,4 @@
-module github.com/jbarbezat/transcoder
+module transcoder
 
 go 1.25.4
 
