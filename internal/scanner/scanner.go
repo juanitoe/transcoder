@@ -214,7 +214,7 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 				continue
 			}
 			fmt.Printf("DEBUG: Metadata extracted successfully: codec=%s, resolution=%dx%d\n",
-				metadata.VideoCodec, metadata.Width, metadata.Height)
+				metadata.Codec, metadata.ResolutionWidth, metadata.ResolutionHeight)
 
 			// Check if file exists in database
 			existing, err := s.db.GetMediaFileByPath(fullPath)
