@@ -56,6 +56,8 @@ type Model struct {
 	statusMsg      string
 	errorMsg       string
 	jobsPanel      int  // 0=active jobs, 1=queued jobs
+	activeJobsScrollOffset  int
+	queuedJobsScrollOffset  int
 
 	// Keyboard hints
 	showHelp       bool
@@ -291,14 +293,18 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Get current job list based on view and panel
 	var jobs []*types.TranscodeJob
+	var scrollOffset *int
+
 	if m.viewMode == ViewHistory {
 		jobs = m.recentJobs
 	} else {
 		// In Jobs view, switch based on panel
 		if m.jobsPanel == 0 {
 			jobs = m.activeJobs
+			scrollOffset = &m.activeJobsScrollOffset
 		} else {
 			jobs = m.queuedJobs
+			scrollOffset = &m.queuedJobsScrollOffset
 		}
 	}
 
@@ -313,11 +319,22 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.selectedJob > 0 {
 			m.selectedJob--
+			// Adjust scroll offset if needed
+			if scrollOffset != nil && m.selectedJob < *scrollOffset {
+				*scrollOffset = m.selectedJob
+			}
 		}
 
 	case "down", "j":
 		if m.selectedJob < len(jobs)-1 {
 			m.selectedJob++
+			// Adjust scroll offset if needed (calculate visible height)
+			if scrollOffset != nil {
+				visibleHeight := m.calculateVisibleJobsHeight()
+				if m.selectedJob >= *scrollOffset+visibleHeight {
+					*scrollOffset = m.selectedJob - visibleHeight + 1
+				}
+			}
 		}
 
 	case "p":
@@ -556,6 +573,18 @@ func (m *Model) refreshData() {
 	m.recentJobs = m.activeJobs
 
 	m.lastUpdate = time.Now()
+}
+
+// calculateVisibleJobsHeight calculates how many job items can fit in the Jobs view
+func (m Model) calculateVisibleJobsHeight() int {
+	// Approximate calculation:
+	// Screen height - header (3 lines) - footer (3 lines) - panel title (3 lines) - help text (2 lines) - margins (4 lines)
+	// Each job takes 2 lines
+	availableHeight := m.height - 15
+	if availableHeight < 2 {
+		availableHeight = 2
+	}
+	return availableHeight / 2 // Each job takes 2 lines
 }
 
 // Styles

@@ -158,6 +158,8 @@ func (m Model) renderDashboard() string {
 
 // renderJobs renders the jobs view with two panels: active and queued
 func (m Model) renderJobs() string {
+	visibleHeight := m.calculateVisibleJobsHeight()
+
 	// Active Jobs Panel
 	activeTitle := "🎬 Active Jobs"
 	if m.jobsPanel == 0 {
@@ -169,7 +171,20 @@ func (m Model) renderJobs() string {
 		activeContent += statusStyle.Render("No active jobs")
 	} else {
 		activeContent += fmt.Sprintf("Total: %d\n\n", len(m.activeJobs))
-		for i, job := range m.activeJobs {
+
+		// Calculate visible window
+		startIdx := m.activeJobsScrollOffset
+		endIdx := startIdx + visibleHeight
+		if endIdx > len(m.activeJobs) {
+			endIdx = len(m.activeJobs)
+		}
+		if startIdx >= len(m.activeJobs) {
+			startIdx = max(0, len(m.activeJobs)-visibleHeight)
+		}
+
+		// Render visible jobs
+		for i := startIdx; i < endIdx; i++ {
+			job := m.activeJobs[i]
 			style := lipgloss.NewStyle()
 			prefix := "  "
 			if m.jobsPanel == 0 && i == m.selectedJob {
@@ -179,14 +194,20 @@ func (m Model) renderJobs() string {
 
 			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
 			activeContent += style.Render(fmt.Sprintf(
-				"%s%s  %s\n"+
-				"     %s | %s\n",
+				"%sJob #%d  %s\n"+
+				"     %s: %s | %s\n",
 				prefix,
-				statusColor.Render(string(job.Status)),
+				job.ID,
 				truncateString(job.FileName, 50),
 				job.Stage,
+				statusColor.Render(string(job.Status)),
 				formatProgress(job.Progress),
 			))
+		}
+
+		// Add scroll indicator if needed
+		if len(m.activeJobs) > visibleHeight {
+			activeContent += fmt.Sprintf("\n%s", helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.activeJobs))))
 		}
 	}
 	activePanel := boxStyle.Render(activeContent)
@@ -203,7 +224,20 @@ func (m Model) renderJobs() string {
 		queuedContent += "Press [a] to queue jobs"
 	} else {
 		queuedContent += fmt.Sprintf("Total: %d\n\n", len(m.queuedJobs))
-		for i, job := range m.queuedJobs {
+
+		// Calculate visible window
+		startIdx := m.queuedJobsScrollOffset
+		endIdx := startIdx + visibleHeight
+		if endIdx > len(m.queuedJobs) {
+			endIdx = len(m.queuedJobs)
+		}
+		if startIdx >= len(m.queuedJobs) {
+			startIdx = max(0, len(m.queuedJobs)-visibleHeight)
+		}
+
+		// Render visible jobs
+		for i := startIdx; i < endIdx; i++ {
+			job := m.queuedJobs[i]
 			style := lipgloss.NewStyle()
 			prefix := "  "
 			if m.jobsPanel == 1 && i == m.selectedJob {
@@ -220,6 +254,11 @@ func (m Model) renderJobs() string {
 				formatBytes(job.FileSizeBytes),
 				job.Priority,
 			))
+		}
+
+		// Add scroll indicator if needed
+		if len(m.queuedJobs) > visibleHeight {
+			queuedContent += fmt.Sprintf("\n%s", helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.queuedJobs))))
 		}
 	}
 	queuedPanel := boxStyle.Render(queuedContent)
@@ -385,7 +424,7 @@ func (m Model) renderHelp() string {
 	return help
 }
 
-// renderLogs renders the logs view with scrolling
+// renderLogs renders the logs view with scrolling (newest first)
 func (m Model) renderLogs() string {
 	content := "📝 Application Logs\n\n"
 
@@ -402,7 +441,10 @@ func (m Model) renderLogs() string {
 	}
 
 	// Calculate the window of logs to display based on scroll offset
+	// Display logs in reverse order (newest first)
 	totalLogs := len(m.logs)
+
+	// startIdx is from the end (newest), counting backwards
 	startIdx := m.logScrollOffset
 	endIdx := startIdx + availableHeight
 
@@ -417,9 +459,9 @@ func (m Model) renderLogs() string {
 		startIdx = max(0, totalLogs-availableHeight)
 	}
 
-	// Display log entries
-	for i := startIdx; i < endIdx; i++ {
-		logEntry := m.logs[i]
+	// Display log entries in reverse order (newest first)
+	for i := endIdx - 1; i >= startIdx; i-- {
+		logEntry := m.logs[totalLogs-1-i]
 
 		// Color code based on log level
 		var style lipgloss.Style
@@ -438,7 +480,7 @@ func (m Model) renderLogs() string {
 
 	// Add scroll indicator
 	if totalLogs > availableHeight {
-		scrollInfo := fmt.Sprintf("\n%s (Showing %d-%d of %d logs)",
+		scrollInfo := fmt.Sprintf("\n%s (Showing %d-%d of %d logs - newest first)",
 			helpStyle.Render("↑/↓ to scroll"),
 			startIdx+1,
 			endIdx,
