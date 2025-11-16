@@ -156,47 +156,81 @@ func (m Model) renderDashboard() string {
 	return dashboard
 }
 
-// renderJobs renders the jobs view
+// renderJobs renders the jobs view with two panels: active and queued
 func (m Model) renderJobs() string {
-	content := "📋 Jobs\n\n"
+	// Active Jobs Panel
+	activeTitle := "🎬 Active Jobs"
+	if m.jobsPanel == 0 {
+		activeTitle = headerStyle.Render("🎬 Active Jobs [SELECTED]")
+	}
 
+	activeContent := activeTitle + "\n\n"
+	if len(m.activeJobs) == 0 {
+		activeContent += statusStyle.Render("No active jobs")
+	} else {
+		activeContent += fmt.Sprintf("Total: %d\n\n", len(m.activeJobs))
+		for i, job := range m.activeJobs {
+			style := lipgloss.NewStyle()
+			prefix := "  "
+			if m.jobsPanel == 0 && i == m.selectedJob {
+				style = selectedStyle
+				prefix = "► "
+			}
+
+			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
+			activeContent += style.Render(fmt.Sprintf(
+				"%s%s  %s\n"+
+				"     %s | %s\n",
+				prefix,
+				statusColor.Render(string(job.Status)),
+				truncateString(job.FileName, 50),
+				job.Stage,
+				formatProgress(job.Progress),
+			))
+		}
+	}
+	activePanel := boxStyle.Render(activeContent)
+
+	// Queued Jobs Panel
+	queuedTitle := "📋 Queued Jobs"
+	if m.jobsPanel == 1 {
+		queuedTitle = headerStyle.Render("📋 Queued Jobs [SELECTED]")
+	}
+
+	queuedContent := queuedTitle + "\n\n"
 	if len(m.queuedJobs) == 0 {
-		content += statusStyle.Render("No jobs in queue\n\n")
-		content += "Press [s] to scan library, then [a] to add/queue jobs"
-		return boxStyle.Render(content)
-	}
+		queuedContent += statusStyle.Render("No queued jobs\n\n")
+		queuedContent += "Press [a] to queue jobs"
+	} else {
+		queuedContent += fmt.Sprintf("Total: %d\n\n", len(m.queuedJobs))
+		for i, job := range m.queuedJobs {
+			style := lipgloss.NewStyle()
+			prefix := "  "
+			if m.jobsPanel == 1 && i == m.selectedJob {
+				style = selectedStyle
+				prefix = "► "
+			}
 
-	content += fmt.Sprintf("Total: %d jobs\n\n", len(m.queuedJobs))
-
-	// Show jobs
-	for i, job := range m.queuedJobs {
-		style := lipgloss.NewStyle()
-		if i == m.selectedJob {
-			style = selectedStyle
+			queuedContent += style.Render(fmt.Sprintf(
+				"%s[%d] %s\n"+
+				"     %s  •  Pri: %d\n",
+				prefix,
+				job.ID,
+				truncateString(job.FileName, 50),
+				formatBytes(job.FileSizeBytes),
+				job.Priority,
+			))
 		}
-
-		prefix := "  "
-		if i == m.selectedJob {
-			prefix = "► "
-		}
-
-		statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
-
-		content += style.Render(fmt.Sprintf(
-			"%s[%d] %s  %s\n"+
-			"     %s  •  Priority: %d\n",
-			prefix,
-			job.ID,
-			statusColor.Render(string(job.Status)),
-			job.FileName,
-			formatBytes(job.FileSizeBytes),
-			job.Priority,
-		))
 	}
+	queuedPanel := boxStyle.Render(queuedContent)
 
-	content += "\n" + helpStyle.Render("↑/↓ navigate  •  [a] add jobs  •  [d] delete  •  [K] kill  •  [p] pause  •  [c] cancel  •  [enter] resume")
+	// Layout panels side by side
+	layout := lipgloss.JoinHorizontal(lipgloss.Top, activePanel, queuedPanel)
 
-	return boxStyle.Render(content)
+	// Add help text
+	helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [d] delete  •  [K] kill  •  [p] pause  •  [c] cancel  •  [enter] resume")
+
+	return layout + helpText
 }
 
 // renderHistory renders the job history view

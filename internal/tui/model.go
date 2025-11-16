@@ -55,6 +55,7 @@ type Model struct {
 	selectedSetting int
 	statusMsg      string
 	errorMsg       string
+	jobsPanel      int  // 0=active jobs, 1=queued jobs
 
 	// Keyboard hints
 	showHelp       bool
@@ -288,12 +289,27 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleJobListKeys handles keys in job list views
 func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	jobs := m.queuedJobs
+	// Get current job list based on view and panel
+	var jobs []*types.TranscodeJob
 	if m.viewMode == ViewHistory {
 		jobs = m.recentJobs
+	} else {
+		// In Jobs view, switch based on panel
+		if m.jobsPanel == 0 {
+			jobs = m.activeJobs
+		} else {
+			jobs = m.queuedJobs
+		}
 	}
 
 	switch msg.String() {
+	case "tab":
+		// Switch panels in Jobs view only
+		if m.viewMode == ViewJobs {
+			m.jobsPanel = (m.jobsPanel + 1) % 2
+			m.selectedJob = 0  // Reset selection when switching panels
+		}
+
 	case "up", "k":
 		if m.selectedJob > 0 {
 			m.selectedJob--
@@ -621,6 +637,13 @@ func formatDuration(seconds int) string {
 func formatProgress(progress float64) string {
 	bar := progressBar(progress, 20)
 	return fmt.Sprintf("[%s] %.1f%%", bar, progress)
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func progressBar(progress float64, width int) string {
