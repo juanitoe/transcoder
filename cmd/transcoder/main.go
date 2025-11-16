@@ -33,6 +33,16 @@ func runTUI() error {
 	}
 	defer db.Close()
 
+	// Recover jobs from previous run (requeue orphaned jobs)
+	recoveredCount, err := db.RecoverJobs()
+	if err != nil {
+		fmt.Printf("Warning: Failed to recover jobs: %v\n", err)
+	} else if recoveredCount > 0 {
+		fmt.Printf("Recovered %d orphaned jobs from previous run\n", recoveredCount)
+		fmt.Println("Press Enter to continue...")
+		fmt.Scanln()
+	}
+
 	// Create scanner
 	scan, err := scanner.New(cfg, db)
 	if err != nil {

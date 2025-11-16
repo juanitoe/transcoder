@@ -342,6 +342,35 @@ func (db *DB) DeleteJob(jobID int64) error {
 	return nil
 }
 
+// RecoverJobs recovers jobs from an unclean shutdown
+// - Resets orphaned jobs (in-progress jobs from previous run) back to queued
+// - Resumes paused jobs
+// Returns the number of jobs recovered
+func (db *DB) RecoverJobs() (int, error) {
+	// Reset orphaned jobs (downloading, transcoding, uploading without a worker)
+	// These were in progress when the app shut down
+	result, err := db.conn.Exec(`
+		UPDATE transcode_jobs
+		SET status = 'queued',
+		    stage = '',
+		    progress = 0,
+		    worker_id = '',
+		    error_message = 'Job recovered after restart',
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE status IN ('downloading', 'transcoding', 'uploading')
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to recover orphaned jobs: %w", err)
+	}
+
+	orphanedCount, _ := result.RowsAffected()
+
+	// Note: We don't automatically resume paused jobs
+	// The user can manually resume them if needed
+
+	return int(orphanedCount), nil
+}
+
 // QueueJobsForTranscoding creates transcode jobs for all media files
 // that should be transcoded but don't already have a job
 func (db *DB) QueueJobsForTranscoding(limit int) (int, error) {
