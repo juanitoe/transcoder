@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"transcoder/internal/types"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // Scanner handles remote media library scanning
@@ -34,34 +36,44 @@ func New(cfg *config.Config, db *database.DB) (*Scanner, error) {
 
 // Connect establishes SSH/SFTP connection to remote server
 func (s *Scanner) Connect(ctx context.Context) error {
-	// Expand SSH key path
-	keyPath := os.ExpandEnv(s.cfg.Remote.SSHKey)
-	if strings.HasPrefix(keyPath, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to get home directory: %w", err)
+	// Try to use SSH agent first (for passphrase-protected keys)
+	var authMethods []ssh.AuthMethod
+
+	// Try SSH agent
+	if agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
+		authMethods = append(authMethods, ssh.PublicKeysCallback(agent.NewClient(agentConn).Signers))
+	}
+
+	// Try loading key file if agent failed or as fallback
+	if len(authMethods) == 0 {
+		keyPath := os.ExpandEnv(s.cfg.Remote.SSHKey)
+		if strings.HasPrefix(keyPath, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
+			keyPath = filepath.Join(home, keyPath[2:])
 		}
-		keyPath = filepath.Join(home, keyPath[2:])
-	}
 
-	// Read private key
-	keyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return fmt.Errorf("failed to read SSH key: %w", err)
-	}
+		// Read private key
+		keyBytes, err := os.ReadFile(keyPath)
+		if err != nil {
+			return fmt.Errorf("failed to read SSH key: %w", err)
+		}
 
-	// Parse private key
-	signer, err := ssh.ParsePrivateKey(keyBytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse SSH key: %w", err)
+		// Parse private key (will fail if passphrase-protected)
+		signer, err := ssh.ParsePrivateKey(keyBytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse SSH key: %w (try using ssh-add to add your key to the agent)", err)
+		}
+
+		authMethods = append(authMethods, ssh.PublicKeys(signer))
 	}
 
 	// Configure SSH client
 	sshConfig := &ssh.ClientConfig{
 		User: s.cfg.Remote.User,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		},
+		Auth: authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Use known_hosts
 		Timeout:         30 * time.Second,
 	}
