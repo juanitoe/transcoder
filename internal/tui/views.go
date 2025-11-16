@@ -260,6 +260,7 @@ func (m Model) renderSettings() string {
 		"Remote Configuration:\n"+
 			"  Host:           %s:%d\n"+
 			"  User:           %s\n"+
+			"  SSH Key:        %s\n"+
 			"  Media Paths:    %d configured\n\n"+
 			"Encoder Settings:\n"+
 			"  Codec:          %s\n"+
@@ -273,6 +274,7 @@ func (m Model) renderSettings() string {
 		m.cfg.Remote.Host,
 		m.cfg.Remote.Port,
 		m.cfg.Remote.User,
+		m.cfg.Remote.SSHKey,
 		len(m.cfg.Remote.MediaPaths),
 		m.cfg.Encoder.Codec,
 		m.cfg.Encoder.Quality,
