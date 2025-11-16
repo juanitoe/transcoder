@@ -331,6 +331,59 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.statusMsg = fmt.Sprintf("Resuming job #%d", job.ID)
 			}
 		}
+
+	case "a":
+		// Add/Queue jobs for transcoding (only in Jobs view)
+		if m.viewMode == ViewJobs {
+			count, err := m.db.QueueJobsForTranscoding(100)
+			if err != nil {
+				m.errorMsg = fmt.Sprintf("Failed to queue jobs: %v", err)
+			} else {
+				m.statusMsg = fmt.Sprintf("Queued %d jobs for transcoding", count)
+				m.addLog("INFO", fmt.Sprintf("Queued %d jobs", count))
+				m.refreshData()
+			}
+		}
+
+	case "d":
+		// Delete selected job (only in Jobs view, terminal states only)
+		if m.viewMode == ViewJobs && m.selectedJob < len(jobs) {
+			job := jobs[m.selectedJob]
+			if job.Status == types.StatusQueued ||
+				job.Status == types.StatusFailed ||
+				job.Status == types.StatusCompleted ||
+				job.Status == types.StatusCanceled {
+				if err := m.db.DeleteJob(job.ID); err != nil {
+					m.errorMsg = fmt.Sprintf("Failed to delete job: %v", err)
+				} else {
+					m.statusMsg = fmt.Sprintf("Deleted job #%d", job.ID)
+					m.addLog("INFO", fmt.Sprintf("Deleted job #%d (%s)", job.ID, job.FileName))
+					m.refreshData()
+				}
+			} else {
+				m.errorMsg = "Cannot delete job in progress (cancel it first)"
+			}
+		}
+
+	case "K":
+		// Kill/Force-cancel selected job (only in Jobs view)
+		if m.viewMode == ViewJobs && m.selectedJob < len(jobs) {
+			job := jobs[m.selectedJob]
+			if job.Status != types.StatusCompleted &&
+				job.Status != types.StatusFailed &&
+				job.Status != types.StatusCanceled {
+				if err := m.db.KillJob(job.ID); err != nil {
+					m.errorMsg = fmt.Sprintf("Failed to kill job: %v", err)
+				} else {
+					m.statusMsg = fmt.Sprintf("Killed job #%d", job.ID)
+					m.addLog("WARN", fmt.Sprintf("Killed job #%d (%s)", job.ID, job.FileName))
+					m.workerPool.CancelJob(job.ID)
+					m.refreshData()
+				}
+			} else {
+				m.errorMsg = "Job already terminated"
+			}
+		}
 	}
 
 	return m, nil

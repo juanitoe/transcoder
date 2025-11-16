@@ -194,7 +194,7 @@ func (m Model) renderJobs() string {
 		))
 	}
 
-	content += "\n" + helpStyle.Render("↑/↓ navigate  •  [p] pause  •  [c] cancel  •  [enter] resume")
+	content += "\n" + helpStyle.Render("↑/↓ navigate  •  [a] add jobs  •  [d] delete  •  [K] kill  •  [p] pause  •  [c] cancel  •  [enter] resume")
 
 	return boxStyle.Render(content)
 }
@@ -336,8 +336,11 @@ func (m Model) renderHelp() string {
 			"  [r]           Refresh data\n" +
 			"  [s]           Start library scan\n" +
 			"  [q/Ctrl+C]    Quit\n\n" +
-			"Jobs/History:\n" +
+			"Jobs View:\n" +
 			"  [↑/↓] or j/k  Navigate jobs\n" +
+			"  [a]           Add/queue jobs for transcoding\n" +
+			"  [d]           Delete job (terminal states only)\n" +
+			"  [K]           Kill job (force cancel)\n" +
 			"  [p]           Pause job\n" +
 			"  [c]           Cancel job\n" +
 			"  [Enter]       Resume paused job\n\n" +
