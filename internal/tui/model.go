@@ -20,7 +20,7 @@ type ViewMode int
 
 const (
 	ViewDashboard ViewMode = iota
-	ViewQueue
+	ViewJobs
 	ViewHistory
 	ViewSettings
 	ViewScanner
@@ -183,8 +183,8 @@ func (m Model) View() string {
 	switch m.viewMode {
 	case ViewDashboard:
 		content = m.renderDashboard()
-	case ViewQueue:
-		content = m.renderQueue()
+	case ViewJobs:
+		content = m.renderJobs()
 	case ViewHistory:
 		content = m.renderHistory()
 	case ViewSettings:
@@ -234,7 +234,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "2":
-		m.viewMode = ViewQueue
+		m.viewMode = ViewJobs
 		m.refreshData()
 		return m, nil
 
@@ -275,7 +275,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// View-specific keys
 	switch m.viewMode {
-	case ViewQueue, ViewHistory:
+	case ViewJobs, ViewHistory:
 		return m.handleJobListKeys(msg)
 	case ViewSettings:
 		return m.handleSettingsKeys(msg)

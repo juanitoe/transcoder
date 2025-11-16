@@ -15,7 +15,7 @@ func (m Model) renderHeader() string {
 	// View tabs
 	tabs := []string{
 		"[1] Dashboard",
-		"[2] Queue",
+		"[2] Jobs",
 		"[3] History",
 		"[4] Settings",
 		"[5] Scanner",
@@ -110,7 +110,7 @@ func (m Model) renderDashboard() string {
 		"⚙️  Worker Status\n\n"+
 			"Active Workers:   %d\n"+
 			"Max Workers:      %d\n"+
-			"Jobs in Queue:    %d\n\n"+
+			"Queued Jobs:      %d\n\n"+
 			"Use [+/-] in Settings to scale workers",
 		len(m.activeJobs),
 		m.cfg.Workers.MaxWorkers,
@@ -156,13 +156,13 @@ func (m Model) renderDashboard() string {
 	return dashboard
 }
 
-// renderQueue renders the job queue view
-func (m Model) renderQueue() string {
-	content := "📋 Job Queue\n\n"
+// renderJobs renders the jobs view
+func (m Model) renderJobs() string {
+	content := "📋 Jobs\n\n"
 
 	if len(m.queuedJobs) == 0 {
 		content += statusStyle.Render("No jobs in queue\n\n")
-		content += "Press [s] to scan library and create jobs"
+		content += "Press [s] to scan library, then [a] to add/queue jobs"
 		return boxStyle.Render(content)
 	}
 
@@ -336,7 +336,7 @@ func (m Model) renderHelp() string {
 			"  [r]           Refresh data\n" +
 			"  [s]           Start library scan\n" +
 			"  [q/Ctrl+C]    Quit\n\n" +
-			"Queue/History:\n" +
+			"Jobs/History:\n" +
 			"  [↑/↓] or j/k  Navigate jobs\n" +
 			"  [p]           Pause job\n" +
 			"  [c]           Cancel job\n" +
