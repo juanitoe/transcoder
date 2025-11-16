@@ -227,6 +227,17 @@ func (db *DB) UpdateJobProgress(jobID int64, progress float64, fps float64, stag
 	return err
 }
 
+// UpdateJobFileSize updates the current transcoded file size
+func (db *DB) UpdateJobFileSize(jobID int64, fileSize int64) error {
+	_, err := db.conn.Exec(`
+		UPDATE transcode_jobs
+		SET transcoded_file_size_bytes = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, fileSize, jobID)
+
+	return err
+}
+
 // CompleteJob marks a job as completed
 func (db *DB) CompleteJob(jobID int64, outputSize int64, encodingTime int, fps float64) error {
 	_, err := db.conn.Exec(`

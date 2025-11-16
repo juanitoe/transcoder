@@ -125,14 +125,23 @@ func (m Model) renderDashboard() string {
 		for _, job := range m.activeJobs {
 			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
 
+			// Show file size info for transcoding jobs
+			sizeInfo := ""
+			if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
+				sizeInfo = fmt.Sprintf(" • %s / %s",
+					formatBytes(job.TranscodedFileSizeBytes),
+					formatBytes(job.FileSizeBytes))
+			}
+
 			activeJobsStr += fmt.Sprintf(
 				"Job #%d  %s\n"+
-				"    %s | %s\n"+
+				"    %s | %s%s\n"+
 				"    %s\n\n",
 				job.ID,
 				truncateString(job.FileName, 40),
 				statusColor.Render(string(job.Status)),
 				job.WorkerID,
+				sizeInfo,
 				formatProgress(job.Progress),
 			)
 		}
@@ -193,13 +202,23 @@ func (m Model) renderJobs() string {
 			}
 
 			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
+
+			// Show file size info for transcoding jobs
+			sizeInfo := ""
+			if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
+				sizeInfo = fmt.Sprintf(" • %s / %s",
+					formatBytes(job.TranscodedFileSizeBytes),
+					formatBytes(job.FileSizeBytes))
+			}
+
 			activeContent += style.Render(fmt.Sprintf(
 				"%sJob #%d  %s\n"+
-				"     %s | %s\n",
+				"     %s%s | %s\n",
 				prefix,
 				job.ID,
 				truncateString(job.FileName, 50),
 				statusColor.Render(string(job.Status)),
+				sizeInfo,
 				formatProgress(job.Progress),
 			))
 		}

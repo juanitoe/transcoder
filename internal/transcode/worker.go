@@ -267,6 +267,26 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Stage 2: Transcode
 	w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding")
 
+	// Start a goroutine to periodically update file size
+	fileSizeDone := make(chan bool)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-fileSizeDone:
+				return
+			case <-ticker.C:
+				// Check output file size
+				if fileInfo, err := os.Stat(localOutputPath); err == nil {
+					w.db.UpdateJobFileSize(job.ID, fileInfo.Size())
+				}
+			}
+		}
+	}()
+	defer close(fileSizeDone)
+
 	// Get total frames for progress calculation
 	var totalFrames int64 = 1
 	mediaFile, err := w.db.GetMediaFileByPath(job.FilePath)
