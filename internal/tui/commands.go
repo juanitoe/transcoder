@@ -15,6 +15,7 @@ import (
 type tickMsg time.Time
 type progressMsg struct{}
 type scanCompleteMsg struct{}
+type scanProgressMsg scanner.ScanProgress
 type errorMsg string
 
 // Commands

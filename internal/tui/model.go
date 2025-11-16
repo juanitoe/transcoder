@@ -102,14 +102,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshData()
 		return m, listenForProgress(m.workerPool)
 
+	case scanProgressMsg:
+		// Handle scan progress update
+		m.scanProgress = scanner.ScanProgress(msg)
+		m.statusMsg = fmt.Sprintf("Scanning: %d files, %d added, %d updated",
+			m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated)
+		if m.scanProgress.LastError != nil {
+			m.errorMsg = fmt.Sprintf("Scan error: %v", m.scanProgress.LastError)
+		}
+		return m, nil
+
 	case scanCompleteMsg:
 		m.scanning = false
-		m.statusMsg = "Scan complete"
+		m.statusMsg = fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated",
+			m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated)
 		m.refreshData()
 		return m, nil
 
 	case errorMsg:
 		m.errorMsg = string(msg)
+		m.scanning = false // Stop scanning on error
 		return m, nil
 	}
 
@@ -196,6 +208,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		// Start scan
 		if !m.scanning {
+			m.scanning = true
+			m.statusMsg = "Starting scan..."
+			m.errorMsg = "" // Clear any previous errors
 			return m, scanLibrary(m.scanner, m.db)
 		}
 		return m, nil
