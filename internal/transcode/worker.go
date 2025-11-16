@@ -189,6 +189,20 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
 
+	// Create a dedicated scanner with its own SSH connection for this job
+	jobScanner, err := scanner.New(w.cfg, w.db)
+	if err != nil {
+		w.db.FailJob(job.ID, fmt.Sprintf("Failed to create scanner: %v", err))
+		return
+	}
+
+	// Establish SSH/SFTP connection
+	if err := jobScanner.Connect(jobCtx); err != nil {
+		w.db.FailJob(job.ID, fmt.Sprintf("Failed to connect to remote server: %v", err))
+		return
+	}
+	defer jobScanner.Close()
+
 	// Monitor for pause/cancel requests
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
@@ -233,7 +247,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Stage 1: Download
 	w.updateProgress(job.ID, types.StageDownload, 0, "Downloading")
-	err := w.scanner.DownloadFile(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
+	err = jobScanner.DownloadFile(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
 		progress := (float64(bytesRead) / float64(totalBytes)) * 100
 		w.updateProgress(job.ID, types.StageDownload, progress, fmt.Sprintf("Downloading: %.1f%%", progress))
 	})
@@ -307,7 +321,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Upload to temporary location first
 	remoteTempPath := job.FilePath + ".transcoded"
-	err = w.scanner.UploadFile(jobCtx, localOutputPath, remoteTempPath, func(bytesWritten, totalBytes int64) {
+	err = jobScanner.UploadFile(jobCtx, localOutputPath, remoteTempPath, func(bytesWritten, totalBytes int64) {
 		progress := (float64(bytesWritten) / float64(totalBytes)) * 100
 		w.updateProgress(job.ID, types.StageUpload, progress, fmt.Sprintf("Uploading: %.1f%%", progress))
 	})
@@ -321,16 +335,16 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	select {
 	case <-jobCtx.Done():
 		// Remove temp file if cancelled after upload
-		w.scanner.DeleteRemoteFile(remoteTempPath)
+		jobScanner.DeleteRemoteFile(remoteTempPath)
 		return
 	default:
 	}
 
 	// Replace original file with transcoded file
 	// First delete the original
-	if err := w.scanner.DeleteRemoteFile(job.FilePath); err != nil {
+	if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
-		w.scanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+		jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
 		return
 	}
 
