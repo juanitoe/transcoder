@@ -42,7 +42,7 @@ func listenForProgress(wp *transcode.WorkerPool) tea.Cmd {
 }
 
 // scanLibrary returns a command that scans the remote library
-func scanLibrary(s *scanner.Scanner, db *database.DB, program *tea.Program) tea.Cmd {
+func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -52,13 +52,25 @@ func scanLibrary(s *scanner.Scanner, db *database.DB, program *tea.Program) tea.
 		}
 		defer s.Close()
 
-		// Scan library with progress updates sent to the TUI
-		err := s.Scan(ctx, func(progress scanner.ScanProgress) {
-			// Send progress updates to the TUI via the program
-			if program != nil {
-				program.Send(scanProgressMsg(progress))
+		// Create a channel for progress updates
+		progressChan := make(chan scanner.ScanProgress, 100)
+
+		// Start a goroutine to listen for progress and return as messages
+		go func() {
+			for progress := range progressChan {
+				// We can't return messages from here, so we'll need a different approach
+				_ = progress
 			}
+		}()
+
+		// Scan library - the callback runs synchronously in the same goroutine
+		// So we can't send messages from it. We need to poll instead.
+		err := s.Scan(ctx, func(progress scanner.ScanProgress) {
+			// Progress callback - runs in scan goroutine
+			// Can't send tea.Msg from here
 		})
+
+		close(progressChan)
 
 		if err != nil {
 			return errorMsg("Scan failed: " + err.Error())

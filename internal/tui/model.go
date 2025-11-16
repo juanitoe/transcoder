@@ -33,7 +33,6 @@ type Model struct {
 	db           *database.DB
 	scanner      *scanner.Scanner
 	workerPool   *transcode.WorkerPool
-	program      *tea.Program
 
 	// State
 	viewMode     ViewMode
@@ -83,11 +82,6 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 	return m
 }
 
-// SetProgram sets the tea.Program reference for sending messages
-func (m *Model) SetProgram(p *tea.Program) {
-	m.program = p
-}
-
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
@@ -111,6 +105,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		// Periodic data refresh
 		m.refreshData()
+
+		// Poll scanner progress if scanning
+		if m.scanning {
+			progress := m.scanner.GetProgress()
+			if progress.FilesScanned != m.scanProgress.FilesScanned {
+				m.scanProgress = progress
+				m.statusMsg = fmt.Sprintf("Scanning: %d files, %d added, %d updated",
+					progress.FilesScanned, progress.FilesAdded, progress.FilesUpdated)
+				if progress.LastError != nil {
+					m.addLog("ERROR", fmt.Sprintf("Scan error: %v", progress.LastError))
+				}
+			}
+		}
+
 		return m, tickCmd()
 
 	case progressMsg:
@@ -238,7 +246,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Starting scan..."
 			m.errorMsg = "" // Clear any previous errors
 			m.addLog("INFO", "Starting library scan")
-			return m, scanLibrary(m.scanner, m.db, m.program)
+			return m, scanLibrary(m.scanner, m.db)
 		}
 		return m, nil
 

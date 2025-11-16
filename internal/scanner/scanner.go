@@ -24,6 +24,7 @@ type Scanner struct {
 	db         *database.DB
 	sshClient  *ssh.Client
 	sftpClient *sftp.Client
+	progress   ScanProgress
 }
 
 // New creates a new Scanner instance
@@ -151,6 +152,7 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 
 	// Update progress
 	progress.CurrentPath = path
+	s.progress = *progress // Store in scanner for polling
 	if progressCb != nil {
 		progressCb(*progress)
 	}
@@ -415,4 +417,9 @@ func (s *Scanner) DeleteRemoteFile(remotePath string) error {
 	}
 
 	return nil
+}
+
+// GetProgress returns the current scan progress
+func (s *Scanner) GetProgress() ScanProgress {
+	return s.progress
 }

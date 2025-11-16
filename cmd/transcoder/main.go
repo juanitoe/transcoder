@@ -49,12 +49,8 @@ func runTUI() error {
 	// Create TUI model
 	model := tui.New(cfg, db, scan, workerPool)
 
-	// Create and run TUI program
+	// Run TUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
-
-	// Set the program reference in the model so it can send messages
-	model.SetProgram(p)
-
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
