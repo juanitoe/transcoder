@@ -48,8 +48,8 @@ func (db *DB) Close() error {
 
 // AddMediaFile adds a discovered media file to the database
 func (db *DB) AddMediaFile(file *types.MediaFile) (int64, error) {
-	audioJSON, _ := json.Marshal(file.AudioStreams)
-	subtitleJSON, _ := json.Marshal(file.SubtitleStreams)
+	audioJSON, _ := json.Marshal(file.AudioStreamsJSON)
+	subtitleJSON, _ := json.Marshal(file.SubtitleStreamsJSON)
 
 	result, err := db.conn.Exec(`
 		INSERT OR IGNORE INTO media_files (
@@ -66,7 +66,7 @@ func (db *DB) AddMediaFile(file *types.MediaFile) (int64, error) {
 		file.DurationSeconds, file.BitrateKbps, file.FPS,
 		string(audioJSON), string(subtitleJSON),
 		file.ShouldTranscode, file.TranscodingPriority,
-		file.EstimatedSizeReductionPct,
+		file.EstimatedSizeReductionPercent,
 	)
 
 	if err != nil {
@@ -78,8 +78,8 @@ func (db *DB) AddMediaFile(file *types.MediaFile) (int64, error) {
 
 // UpdateMediaFile updates an existing media file
 func (db *DB) UpdateMediaFile(id int64, file *types.MediaFile) error {
-	audioJSON, _ := json.Marshal(file.AudioStreams)
-	subtitleJSON, _ := json.Marshal(file.SubtitleStreams)
+	audioJSON, _ := json.Marshal(file.AudioStreamsJSON)
+	subtitleJSON, _ := json.Marshal(file.SubtitleStreamsJSON)
 
 	_, err := db.conn.Exec(`
 		UPDATE media_files SET
@@ -97,7 +97,7 @@ func (db *DB) UpdateMediaFile(id int64, file *types.MediaFile) error {
 		file.DurationSeconds, file.BitrateKbps, file.FPS,
 		string(audioJSON), string(subtitleJSON),
 		file.ShouldTranscode, file.TranscodingPriority,
-		file.EstimatedSizeReductionPct,
+		file.EstimatedSizeReductionPercent,
 		id,
 	)
 
@@ -356,7 +356,7 @@ func (db *DB) GetStatistics() (*types.Statistics, error) {
 		return nil, err
 	}
 
-	stats.TotalSizeGB = float64(totalSizeBytes) / (1024 * 1024 * 1024)
+	stats.TotalSize = totalSizeBytes
 
 	// Count job statuses
 	row = db.conn.QueryRow(`
@@ -372,15 +372,15 @@ func (db *DB) GetStatistics() (*types.Statistics, error) {
 
 	var originalSize, transcodedSize int64
 	if err := row.Scan(
-		&stats.Queued, &stats.Active, &stats.Completed, &stats.Failed,
+		&stats.Queued, &stats.InProgress, &stats.Completed, &stats.Failed,
 		&originalSize, &transcodedSize,
 	); err != nil {
 		return nil, err
 	}
 
 	if transcodedSize > 0 {
-		stats.TranscodedSizeGB = float64(transcodedSize) / (1024 * 1024 * 1024)
-		stats.SpaceSavedGB = float64(originalSize-transcodedSize) / (1024 * 1024 * 1024)
+		stats.TranscodedSize = transcodedSize
+		stats.SpaceSaved = originalSize - transcodedSize
 		if originalSize > 0 {
 			stats.SpaceSavedPercent = (float64(originalSize-transcodedSize) / float64(originalSize)) * 100
 		}
@@ -459,7 +459,7 @@ func (db *DB) scanMediaFile(row *sql.Row) (*types.MediaFile, error) {
 		&file.DurationSeconds, &file.BitrateKbps, &file.FPS,
 		&audioJSON, &subtitleJSON,
 		&file.ShouldTranscode, &file.TranscodingPriority,
-		&file.EstimatedSizeReductionPct,
+		&file.EstimatedSizeReductionPercent,
 		&file.DiscoveredAt, &file.UpdatedAt,
 	)
 
@@ -467,8 +467,8 @@ func (db *DB) scanMediaFile(row *sql.Row) (*types.MediaFile, error) {
 		return nil, err
 	}
 
-	json.Unmarshal([]byte(audioJSON), &file.AudioStreams)
-	json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreams)
+	json.Unmarshal([]byte(audioJSON), &file.AudioStreamsJSON)
+	json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreamsJSON)
 
 	return file, nil
 }

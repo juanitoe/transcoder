@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/jbarbezat/transcoder/internal/config"
-	"github.com/jbarbezat/transcoder/internal/types"
 )
 
 // Encoder handles video transcoding with FFmpeg
@@ -203,7 +202,7 @@ type FileInfo struct {
 }
 
 // CalculateSavings calculates the space saved by transcoding
-func CalculateSavings(originalSize, transcodedSize int64) (bytesaved int64, percentSaved float64) {
+func CalculateSavings(originalSize, transcodedSize int64) (bytesSaved int64, percentSaved float64) {
 	bytesSaved = originalSize - transcodedSize
 	if originalSize > 0 {
 		percentSaved = (float64(bytesSaved) / float64(originalSize)) * 100

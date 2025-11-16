@@ -1,0 +1,423 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/jbarbezat/transcoder/internal/config"
+	"github.com/jbarbezat/transcoder/internal/database"
+	"github.com/jbarbezat/transcoder/internal/scanner"
+	"github.com/jbarbezat/transcoder/internal/transcode"
+	"github.com/jbarbezat/transcoder/internal/types"
+)
+
+// ViewMode represents different TUI screens
+type ViewMode int
+
+const (
+	ViewDashboard ViewMode = iota
+	ViewQueue
+	ViewHistory
+	ViewSettings
+	ViewScanner
+)
+
+// Model is the Bubble Tea model for the TUI
+type Model struct {
+	cfg          *config.Config
+	db           *database.DB
+	scanner      *scanner.Scanner
+	workerPool   *transcode.WorkerPool
+
+	// State
+	viewMode     ViewMode
+	width        int
+	height       int
+	lastUpdate   time.Time
+
+	// Data
+	statistics   *types.Statistics
+	activeJobs   []*types.TranscodeJob
+	queuedJobs   []*types.TranscodeJob
+	recentJobs   []*types.TranscodeJob
+
+	// Scanner state
+	scanning     bool
+	scanProgress scanner.ScanProgress
+
+	// UI State
+	selectedJob  int
+	statusMsg    string
+	errorMsg     string
+
+	// Keyboard hints
+	showHelp     bool
+}
+
+// New creates a new TUI model
+func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPool *transcode.WorkerPool) Model {
+	return Model{
+		cfg:        cfg,
+		db:         db,
+		scanner:    scanner,
+		workerPool: workerPool,
+		viewMode:   ViewDashboard,
+		lastUpdate: time.Now(),
+	}
+}
+
+// Init initializes the model
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(
+		tea.EnterAltScreen,
+		tickCmd(),
+		listenForProgress(m.workerPool),
+	)
+}
+
+// Update handles messages
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
+	case tea.KeyMsg:
+		return m.handleKeyPress(msg)
+
+	case tickMsg:
+		// Periodic data refresh
+		m.refreshData()
+		return m, tickCmd()
+
+	case progressMsg:
+		// Handle progress update from workers
+		m.refreshData()
+		return m, listenForProgress(m.workerPool)
+
+	case scanCompleteMsg:
+		m.scanning = false
+		m.statusMsg = "Scan complete"
+		m.refreshData()
+		return m, nil
+
+	case errorMsg:
+		m.errorMsg = string(msg)
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// View renders the TUI
+func (m Model) View() string {
+	if m.width == 0 {
+		return "Loading..."
+	}
+
+	var content string
+
+	switch m.viewMode {
+	case ViewDashboard:
+		content = m.renderDashboard()
+	case ViewQueue:
+		content = m.renderQueue()
+	case ViewHistory:
+		content = m.renderHistory()
+	case ViewSettings:
+		content = m.renderSettings()
+	case ViewScanner:
+		content = m.renderScanner()
+	default:
+		content = m.renderDashboard()
+	}
+
+	// Add header and footer
+	header := m.renderHeader()
+	footer := m.renderFooter()
+
+	// Calculate content height
+	contentHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer) - 2
+
+	// Ensure content fits
+	contentStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(contentHeight)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		contentStyle.Render(content),
+		footer,
+	)
+}
+
+// handleKeyPress processes keyboard input
+func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Global keys
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+
+	case "h", "?":
+		m.showHelp = !m.showHelp
+		return m, nil
+
+	case "1":
+		m.viewMode = ViewDashboard
+		m.refreshData()
+		return m, nil
+
+	case "2":
+		m.viewMode = ViewQueue
+		m.refreshData()
+		return m, nil
+
+	case "3":
+		m.viewMode = ViewHistory
+		m.refreshData()
+		return m, nil
+
+	case "4":
+		m.viewMode = ViewSettings
+		return m, nil
+
+	case "5":
+		m.viewMode = ViewScanner
+		return m, nil
+
+	case "s":
+		// Start scan
+		if !m.scanning {
+			return m, scanLibrary(m.scanner, m.db)
+		}
+		return m, nil
+
+	case "r":
+		// Refresh data
+		m.refreshData()
+		m.statusMsg = "Data refreshed"
+		return m, nil
+	}
+
+	// View-specific keys
+	switch m.viewMode {
+	case ViewQueue, ViewHistory:
+		return m.handleJobListKeys(msg)
+	case ViewSettings:
+		return m.handleSettingsKeys(msg)
+	}
+
+	return m, nil
+}
+
+// handleJobListKeys handles keys in job list views
+func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	jobs := m.queuedJobs
+	if m.viewMode == ViewHistory {
+		jobs = m.recentJobs
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.selectedJob > 0 {
+			m.selectedJob--
+		}
+
+	case "down", "j":
+		if m.selectedJob < len(jobs)-1 {
+			m.selectedJob++
+		}
+
+	case "p":
+		// Pause selected job
+		if m.selectedJob < len(jobs) {
+			job := jobs[m.selectedJob]
+			if job.Status == types.StatusTranscoding || job.Status == types.StatusDownloading {
+				m.workerPool.PauseJob(job.ID)
+				m.statusMsg = fmt.Sprintf("Pausing job #%d", job.ID)
+			}
+		}
+
+	case "c":
+		// Cancel selected job
+		if m.selectedJob < len(jobs) {
+			job := jobs[m.selectedJob]
+			m.workerPool.CancelJob(job.ID)
+			m.statusMsg = fmt.Sprintf("Canceling job #%d", job.ID)
+		}
+
+	case "enter":
+		// Resume paused job
+		if m.selectedJob < len(jobs) {
+			job := jobs[m.selectedJob]
+			if job.Status == types.StatusPaused {
+				m.db.ResumeJob(job.ID)
+				m.statusMsg = fmt.Sprintf("Resuming job #%d", job.ID)
+			}
+		}
+	}
+
+	return m, nil
+}
+
+// handleSettingsKeys handles keys in settings view
+func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "+", "=":
+		// Increase workers
+		m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers + 1)
+		m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
+
+	case "-", "_":
+		// Decrease workers
+		if m.cfg.Workers.MaxWorkers > 1 {
+			m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers - 1)
+			m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
+		}
+	}
+
+	return m, nil
+}
+
+// refreshData updates all data from the database
+func (m *Model) refreshData() {
+	var err error
+
+	// Get statistics
+	m.statistics, err = m.db.GetStatistics()
+	if err != nil {
+		m.errorMsg = fmt.Sprintf("Failed to get statistics: %v", err)
+	}
+
+	// Get active jobs
+	m.activeJobs, err = m.db.GetActiveJobs()
+	if err != nil {
+		m.errorMsg = fmt.Sprintf("Failed to get active jobs: %v", err)
+	}
+
+	// Get queued jobs
+	m.queuedJobs, err = m.db.GetQueuedJobs(100)
+	if err != nil {
+		m.errorMsg = fmt.Sprintf("Failed to get queued jobs: %v", err)
+	}
+
+	// Get recent jobs (limited)
+	// Note: We'll need to add a GetRecentJobs method to the database
+	// For now, combine active and some completed jobs
+	m.recentJobs = m.activeJobs
+
+	m.lastUpdate = time.Now()
+}
+
+// Styles
+var (
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("205")).
+			MarginBottom(1)
+
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Background(lipgloss.Color("62")).
+			Foreground(lipgloss.Color("230")).
+			Padding(0, 1)
+
+	statusStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240"))
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true)
+
+	successStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("42")).
+			Bold(true)
+
+	boxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(1, 2).
+			MarginBottom(1)
+
+	selectedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205")).
+			Bold(true)
+
+	helpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
+)
+
+// Helper functions for formatting
+func formatBytes(bytes int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+		TB = 1024 * GB
+	)
+
+	switch {
+	case bytes >= TB:
+		return fmt.Sprintf("%.2f TB", float64(bytes)/float64(TB))
+	case bytes >= GB:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+func formatDuration(seconds int) string {
+	d := time.Duration(seconds) * time.Second
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	s := int(d.Seconds()) % 60
+
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, s)
+	} else if m > 0 {
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
+}
+
+func formatProgress(progress float64) string {
+	bar := progressBar(progress, 20)
+	return fmt.Sprintf("[%s] %.1f%%", bar, progress)
+}
+
+func progressBar(progress float64, width int) string {
+	filled := int(progress / 100 * float64(width))
+	if filled > width {
+		filled = width
+	}
+	empty := width - filled
+
+	return strings.Repeat("█", filled) + strings.Repeat("░", empty)
+}
+
+func statusColor(status types.JobStatus) lipgloss.Color {
+	switch status {
+	case types.StatusCompleted:
+		return lipgloss.Color("42")
+	case types.StatusFailed:
+		return lipgloss.Color("196")
+	case types.StatusTranscoding, types.StatusDownloading, types.StatusUploading:
+		return lipgloss.Color("226")
+	case types.StatusPaused:
+		return lipgloss.Color("208")
+	case types.StatusCanceled:
+		return lipgloss.Color("240")
+	default:
+		return lipgloss.Color("240")
+	}
+}

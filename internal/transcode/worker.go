@@ -341,16 +341,17 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Calculate encoding time and stats
 	encodingTime := int(time.Since(startTime).Seconds())
+	fps := 0.0 // We could calculate this from total frames / encoding time
 
 	// Complete the job
-	w.db.CompleteJob(job.ID, transcodedInfo.Size, encodingTime)
+	w.db.CompleteJob(job.ID, transcodedInfo.Size, encodingTime, fps)
 	w.updateProgress(job.ID, types.StageUpload, 100, "Completed")
 }
 
 // updateProgress sends a progress update
 func (w *Worker) updateProgress(jobID int64, stage types.ProcessingStage, progress float64, message string) {
 	// Update database
-	w.db.UpdateJobProgress(jobID, stage, progress)
+	w.db.UpdateJobProgress(jobID, progress, 0.0)
 
 	// Send to progress channel
 	select {

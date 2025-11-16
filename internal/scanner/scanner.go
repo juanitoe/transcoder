@@ -198,7 +198,8 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 
 			if existing == nil {
 				// New file - add to database
-				if err := s.db.AddMediaFile(metadata); err != nil {
+				_, err := s.db.AddMediaFile(metadata)
+				if err != nil {
 					progress.ErrorCount++
 					progress.LastError = fmt.Errorf("failed to add %s to database: %w", fullPath, err)
 					if progressCb != nil {
@@ -211,7 +212,7 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 				// Existing file - update if changed
 				if existing.FileSizeBytes != metadata.FileSizeBytes {
 					metadata.ID = existing.ID
-					if err := s.db.UpdateMediaFile(metadata); err != nil {
+					if err := s.db.UpdateMediaFile(existing.ID, metadata); err != nil {
 						progress.ErrorCount++
 						progress.LastError = fmt.Errorf("failed to update %s in database: %w", fullPath, err)
 						if progressCb != nil {

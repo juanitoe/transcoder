@@ -30,23 +30,23 @@ const (
 
 // MediaFile represents a discovered media file from the remote library
 type MediaFile struct {
-	ID                          int64     `json:"id"`
-	FilePath                    string    `json:"file_path"`
-	FileName                    string    `json:"file_name"`
-	FileSizeBytes               int64     `json:"file_size_bytes"`
-	Codec                       string    `json:"codec"`
-	ResolutionWidth             int       `json:"resolution_width"`
-	ResolutionHeight            int       `json:"resolution_height"`
-	DurationSeconds             float64   `json:"duration_seconds"`
-	BitrateKbps                 int       `json:"bitrate_kbps"`
-	FPS                         float64   `json:"fps"`
-	AudioStreams                string    `json:"audio_streams"`       // JSON array
-	SubtitleStreams             string    `json:"subtitle_streams"`    // JSON array
-	ShouldTranscode             bool      `json:"should_transcode"`
-	TranscodingPriority         int       `json:"transcoding_priority"`
-	EstimatedSizeReductionPct   int       `json:"estimated_size_reduction_percent"`
-	DiscoveredAt                time.Time `json:"discovered_at"`
-	UpdatedAt                   time.Time `json:"updated_at"`
+	ID                              int64     `json:"id"`
+	FilePath                        string    `json:"file_path"`
+	FileName                        string    `json:"file_name"`
+	FileSizeBytes                   int64     `json:"file_size_bytes"`
+	Codec                           string    `json:"codec"`
+	ResolutionWidth                 int       `json:"resolution_width"`
+	ResolutionHeight                int       `json:"resolution_height"`
+	DurationSeconds                 float64   `json:"duration_seconds"`
+	BitrateKbps                     int       `json:"bitrate_kbps"`
+	FPS                             float64   `json:"fps"`
+	AudioStreamsJSON                string    `json:"audio_streams_json"`       // JSON array
+	SubtitleStreamsJSON             string    `json:"subtitle_streams_json"`    // JSON array
+	ShouldTranscode                 bool      `json:"should_transcode"`
+	TranscodingPriority             int       `json:"transcoding_priority"`
+	EstimatedSizeReductionPercent   int       `json:"estimated_size_reduction_percent"`
+	DiscoveredAt                    time.Time `json:"discovered_at"`
+	UpdatedAt                       time.Time `json:"updated_at"`
 }
 
 // TranscodeJob represents an active or completed transcode job
@@ -94,18 +94,19 @@ type ProgressUpdate struct {
 
 // Statistics represents aggregate statistics
 type Statistics struct {
-	TotalFiles              int     `json:"total_files"`
-	ToTranscode             int     `json:"to_transcode"`
-	Queued                  int     `json:"queued"`
-	Active                  int     `json:"active"`
-	Completed               int     `json:"completed"`
-	Failed                  int     `json:"failed"`
-	TotalSizeGB             float64 `json:"total_size_gb"`
-	TranscodedSizeGB        float64 `json:"transcoded_size_gb"`
-	SpaceSavedGB            float64 `json:"space_saved_gb"`
-	SpaceSavedPercent       float64 `json:"space_saved_percent"`
-	AvgEncodingFPS          float64 `json:"avg_encoding_fps"`
-	AvgEncodingTimeMinutes  float64 `json:"avg_encoding_time_minutes"`
+	TotalFiles              int        `json:"total_files"`
+	ToTranscode             int        `json:"to_transcode"`
+	Queued                  int        `json:"queued"`
+	InProgress              int        `json:"in_progress"`
+	Completed               int        `json:"completed"`
+	Failed                  int        `json:"failed"`
+	TotalSize               int64      `json:"total_size"`
+	TranscodedSize          int64      `json:"transcoded_size"`
+	SpaceSaved              int64      `json:"space_saved"`
+	SpaceSavedPercent       float64    `json:"space_saved_percent"`
+	AvgSizeReduction        float64    `json:"avg_size_reduction"`
+	AvgEncodingFPS          float64    `json:"avg_encoding_fps"`
+	AvgEncodingTimeMinutes  float64    `json:"avg_encoding_time_minutes"`
 	LastScanTime            *time.Time `json:"last_scan_time"`
 }
 
@@ -139,17 +140,21 @@ type Event struct {
 
 // AudioStream represents an audio stream
 type AudioStream struct {
-	Codec    string `json:"codec"`
-	Language string `json:"language"`
-	Channels int    `json:"channels"`
-	Title    string `json:"title"`
+	Index         int    `json:"index"`
+	Codec         string `json:"codec"`
+	Language      string `json:"language"`
+	Channels      int    `json:"channels"`
+	ChannelLayout string `json:"channel_layout"`
+	Title         string `json:"title"`
 }
 
 // SubtitleStream represents a subtitle stream
 type SubtitleStream struct {
+	Index    int    `json:"index"`
 	Codec    string `json:"codec"`
 	Language string `json:"language"`
 	Title    string `json:"title"`
+	Forced   bool   `json:"forced"`
 }
 
 // VideoMetadata represents complete video metadata
