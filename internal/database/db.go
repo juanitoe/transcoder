@@ -626,13 +626,14 @@ func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 	var transcodedFileSizeBytes, encodingTimeSeconds sql.NullInt64
 	var encodingFPS sql.NullFloat64
 	var verificationPassed sql.NullBool
+	var errorMessage sql.NullString
 
 	err := row.Scan(
 		&job.ID, &job.MediaFileID, &job.FilePath, &job.FileName, &job.FileSizeBytes,
 		&status, &stage, &job.Progress, &job.WorkerID,
 		&transcodeStartedAt, &transcodeCompletedAt,
 		&transcodedFileSizeBytes, &encodingTimeSeconds, &encodingFPS,
-		&verificationPassed, &job.ErrorMessage, &job.RetryCount, &lastRetryAt,
+		&verificationPassed, &errorMessage, &job.RetryCount, &lastRetryAt,
 		&job.Priority, &job.CreatedAt, &job.UpdatedAt,
 	)
 
@@ -661,6 +662,9 @@ func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 	}
 	if verificationPassed.Valid {
 		job.VerificationPassed = verificationPassed.Bool
+	}
+	if errorMessage.Valid {
+		job.ErrorMessage = errorMessage.String
 	}
 	if lastRetryAt.Valid {
 		job.LastRetryAt = &lastRetryAt.Time
@@ -676,13 +680,14 @@ func (db *DB) scanTranscodeJobRow(rows *sql.Rows) (*types.TranscodeJob, error) {
 	var transcodedFileSizeBytes, encodingTimeSeconds sql.NullInt64
 	var encodingFPS sql.NullFloat64
 	var verificationPassed sql.NullBool
+	var errorMessage sql.NullString
 
 	err := rows.Scan(
 		&job.ID, &job.MediaFileID, &job.FilePath, &job.FileName, &job.FileSizeBytes,
 		&status, &stage, &job.Progress, &job.WorkerID,
 		&transcodeStartedAt, &transcodeCompletedAt,
 		&transcodedFileSizeBytes, &encodingTimeSeconds, &encodingFPS,
-		&verificationPassed, &job.ErrorMessage, &job.RetryCount, &lastRetryAt,
+		&verificationPassed, &errorMessage, &job.RetryCount, &lastRetryAt,
 		&job.Priority, &job.CreatedAt, &job.UpdatedAt,
 	)
 
@@ -711,6 +716,9 @@ func (db *DB) scanTranscodeJobRow(rows *sql.Rows) (*types.TranscodeJob, error) {
 	}
 	if verificationPassed.Valid {
 		job.VerificationPassed = verificationPassed.Bool
+	}
+	if errorMessage.Valid {
+		job.ErrorMessage = errorMessage.String
 	}
 	if lastRetryAt.Valid {
 		job.LastRetryAt = &lastRetryAt.Time
