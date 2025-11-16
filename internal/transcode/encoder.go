@@ -1,0 +1,212 @@
+package transcode
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jbarbezat/transcoder/internal/config"
+	"github.com/jbarbezat/transcoder/internal/types"
+)
+
+// Encoder handles video transcoding with FFmpeg
+type Encoder struct {
+	cfg *config.Config
+}
+
+// New creates a new Encoder instance
+func New(cfg *config.Config) *Encoder {
+	return &Encoder{
+		cfg: cfg,
+	}
+}
+
+// TranscodeProgress represents real-time transcoding progress
+type TranscodeProgress struct {
+	Frame       int64
+	FPS         float64
+	Bitrate     string
+	TotalSize   int64
+	Time        string
+	Speed       float64
+	Progress    float64 // 0-100
+}
+
+// ProgressCallback is called periodically during transcoding
+type ProgressCallback func(progress TranscodeProgress)
+
+// Transcode transcodes a video file to HEVC
+func (e *Encoder) Transcode(ctx context.Context, inputPath, outputPath string, totalFrames int64, progressCb ProgressCallback) error {
+	// Ensure output directory exists
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Build FFmpeg command
+	args := e.buildFFmpegArgs(inputPath, outputPath)
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+
+	// Create pipe for stderr (where FFmpeg sends progress)
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	// Start FFmpeg
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
+	// Parse progress from stderr
+	scanner := bufio.NewScanner(stderrPipe)
+	progressRegex := regexp.MustCompile(`frame=\s*(\d+)\s+fps=\s*([\d.]+)\s+.*size=\s*(\d+)kB\s+time=(\S+)\s+bitrate=\s*(\S+)\s+speed=\s*([\d.]+)x`)
+
+	go func() {
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Parse progress line
+			matches := progressRegex.FindStringSubmatch(line)
+			if len(matches) >= 7 {
+				frame, _ := strconv.ParseInt(matches[1], 10, 64)
+				fps, _ := strconv.ParseFloat(matches[2], 64)
+				size, _ := strconv.ParseInt(matches[3], 10, 64)
+				timeStr := matches[4]
+				bitrateStr := matches[5]
+				speed, _ := strconv.ParseFloat(matches[6], 64)
+
+				// Calculate progress percentage
+				var progressPercent float64
+				if totalFrames > 0 {
+					progressPercent = (float64(frame) / float64(totalFrames)) * 100
+					if progressPercent > 100 {
+						progressPercent = 100
+					}
+				}
+
+				// Report progress
+				if progressCb != nil {
+					progressCb(TranscodeProgress{
+						Frame:     frame,
+						FPS:       fps,
+						Bitrate:   bitrateStr,
+						TotalSize: size * 1024, // Convert KB to bytes
+						Time:      timeStr,
+						Speed:     speed,
+						Progress:  progressPercent,
+					})
+				}
+			}
+		}
+	}()
+
+	// Wait for FFmpeg to complete
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("ffmpeg failed: %w", err)
+	}
+
+	return nil
+}
+
+// buildFFmpegArgs builds the FFmpeg command arguments
+func (e *Encoder) buildFFmpegArgs(inputPath, outputPath string) []string {
+	args := []string{
+		"-y", // Overwrite output file
+		"-i", inputPath,
+		"-c:v", e.cfg.Encoder.Codec, // Video codec (hevc_videotoolbox)
+		"-progress", "pipe:2", // Send progress to stderr
+		"-stats_period", "0.5", // Update stats every 0.5 seconds
+	}
+
+	// Quality settings
+	// For videotoolbox, use -q:v (0-100, where 100 is best quality)
+	if strings.Contains(e.cfg.Encoder.Codec, "videotoolbox") {
+		args = append(args, "-q:v", strconv.Itoa(e.cfg.Encoder.Quality))
+	} else {
+		// For software encoders, use CRF (0-51, where 0 is lossless)
+		crf := 51 - int(float64(e.cfg.Encoder.Quality)/100.0*51)
+		args = append(args, "-crf", strconv.Itoa(crf))
+	}
+
+	// Preset (if applicable)
+	if e.cfg.Encoder.Preset != "" && !strings.Contains(e.cfg.Encoder.Codec, "videotoolbox") {
+		args = append(args, "-preset", e.cfg.Encoder.Preset)
+	}
+
+	// Copy audio streams
+	args = append(args, "-c:a", "copy")
+
+	// Copy subtitle streams
+	args = append(args, "-c:s", "copy")
+
+	// Map all streams
+	args = append(args, "-map", "0")
+
+	// Output file
+	args = append(args, outputPath)
+
+	return args
+}
+
+// Verify checks if a transcoded file is valid and playable
+func (e *Encoder) Verify(ctx context.Context, filePath string) error {
+	// Use ffprobe to verify the file
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		filePath,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("verification failed: %w", err)
+	}
+
+	// Check if we got a valid duration
+	durationStr := strings.TrimSpace(string(output))
+	duration, err := strconv.ParseFloat(durationStr, 64)
+	if err != nil || duration <= 0 {
+		return fmt.Errorf("invalid video duration: %s", durationStr)
+	}
+
+	return nil
+}
+
+// GetFileInfo returns basic file information
+func (e *Encoder) GetFileInfo(filePath string) (*FileInfo, error) {
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	return &FileInfo{
+		Path:         filePath,
+		Size:         stat.Size(),
+		ModifiedTime: stat.ModTime(),
+	}, nil
+}
+
+// FileInfo contains basic file information
+type FileInfo struct {
+	Path         string
+	Size         int64
+	ModifiedTime time.Time
+}
+
+// CalculateSavings calculates the space saved by transcoding
+func CalculateSavings(originalSize, transcodedSize int64) (bytesaved int64, percentSaved float64) {
+	bytesSaved = originalSize - transcodedSize
+	if originalSize > 0 {
+		percentSaved = (float64(bytesSaved) / float64(originalSize)) * 100
+	}
+	return bytesSaved, percentSaved
+}
