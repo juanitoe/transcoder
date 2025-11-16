@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"transcoder/internal/config"
@@ -14,6 +17,13 @@ import (
 )
 
 func runTUI() error {
+	// Setup signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
 	// Load configuration
 	configPath := os.ExpandEnv("$HOME/transcoder/config.yaml")
 	cfg, err := config.Load(configPath)
@@ -54,13 +64,31 @@ func runTUI() error {
 
 	// Start worker pool
 	workerPool.Start()
-	defer workerPool.Stop()
+	defer func() {
+		fmt.Println("\nShutting down gracefully...")
+		workerPool.Stop()
+		fmt.Println("Worker pool stopped")
+	}()
 
 	// Create TUI model
 	model := tui.New(cfg, db, scan, workerPool)
 
-	// Run TUI
+	// Run TUI in a goroutine so we can handle signals
 	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// Handle signals in a separate goroutine
+	go func() {
+		select {
+		case sig := <-sigChan:
+			fmt.Printf("\nReceived signal: %v\n", sig)
+			cancel()
+			p.Quit()
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	// Run TUI
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
