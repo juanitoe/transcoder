@@ -28,7 +28,7 @@ This plan addresses proper task management, restart recovery, and the complete w
 
 ## Phase 1: Job Creation Workflow
 
-### 1.1 Add Database Method to Queue Jobs from Media Files
+### 1.1 Add Database Methods for Job Management
 **File:** `internal/database/db.go`
 
 Add method to create jobs for all files where `should_transcode=true`:
@@ -76,17 +76,82 @@ func (db *DB) QueueJobsForTranscoding(limit int) (int, error) {
 
     return count, nil
 }
+
+// DeleteJob permanently deletes a job from the database
+// Only allowed for jobs in terminal states (queued, failed, completed, canceled)
+func (db *DB) DeleteJob(jobID int64) error {
+    query := `
+        DELETE FROM transcode_jobs
+        WHERE id = ?
+            AND status IN ('queued', 'failed', 'completed', 'canceled')
+    `
+
+    result, err := db.conn.Exec(query, jobID)
+    if err != nil {
+        return err
+    }
+
+    rowsAffected, _ := result.RowsAffected()
+    if rowsAffected == 0 {
+        return fmt.Errorf("job not found or cannot be deleted (may be in progress)")
+    }
+
+    return nil
+}
+
+// KillJob immediately cancels a job and marks it as canceled
+// Unlike CancelJob, this forces termination regardless of state
+func (db *DB) KillJob(jobID int64) error {
+    query := `
+        UPDATE transcode_jobs
+        SET status = 'canceled',
+            error_message = 'Job killed by user',
+            worker_id = '',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+            AND status NOT IN ('completed', 'failed', 'canceled')
+    `
+
+    result, err := db.conn.Exec(query, jobID)
+    if err != nil {
+        return err
+    }
+
+    rowsAffected, _ := result.RowsAffected()
+    if rowsAffected == 0 {
+        return fmt.Errorf("job not found or already terminated")
+    }
+
+    return nil
+}
 ```
 
-### 1.2 Add UI Command to Queue Jobs
+### 1.2 Rename Queue View to Jobs View
 **File:** `internal/tui/model.go`
 
-In `handleKeyPress()` around line 268, add new key binding:
+Change view constant and references:
+```go
+const (
+    ViewDashboard ViewMode = iota
+    ViewJobs      // Renamed from ViewQueue
+    ViewHistory
+    ViewSettings
+    ViewScanner
+    ViewLogs
+)
+```
+
+Update all references from `ViewQueue` to `ViewJobs` throughout the file.
+
+### 1.3 Add UI Commands for Job Management
+**File:** `internal/tui/model.go`
+
+In `handleKeyPress()` around line 268, add new key bindings:
 
 ```go
 case "a":
-    // Add/Queue jobs for transcoding (only in Queue view)
-    if m.viewMode == ViewQueue {
+    // Add/Queue jobs for transcoding (only in Jobs view)
+    if m.viewMode == ViewJobs {
         count, err := m.db.QueueJobsForTranscoding(100) // Queue up to 100 jobs
         if err != nil {
             m.errorMsg = fmt.Sprintf("Failed to queue jobs: %v", err)
@@ -97,15 +162,69 @@ case "a":
         }
         return m, nil
     }
+
+case "d":
+    // Delete selected job (only in Jobs view)
+    if m.viewMode == ViewJobs && m.selectedJob < len(m.queuedJobs) {
+        job := m.queuedJobs[m.selectedJob]
+        // Only allow deleting queued, failed, completed, or canceled jobs
+        if job.Status == types.StatusQueued ||
+           job.Status == types.StatusFailed ||
+           job.Status == types.StatusCompleted ||
+           job.Status == types.StatusCanceled {
+            if err := m.db.DeleteJob(job.ID); err != nil {
+                m.errorMsg = fmt.Sprintf("Failed to delete job: %v", err)
+            } else {
+                m.statusMsg = fmt.Sprintf("Deleted job #%d", job.ID)
+                m.addLog("INFO", fmt.Sprintf("Deleted job #%d (%s)", job.ID, job.FileName))
+                m.refreshData()
+            }
+        } else {
+            m.errorMsg = "Cannot delete job in progress (cancel it first)"
+        }
+        return m, nil
+    }
+
+case "k":
+    // Kill/Force-cancel selected job (only in Jobs view)
+    if m.viewMode == ViewJobs && m.selectedJob < len(m.queuedJobs) {
+        job := m.queuedJobs[m.selectedJob]
+        // Kill any job that's not already completed/failed/canceled
+        if job.Status != types.StatusCompleted &&
+           job.Status != types.StatusFailed &&
+           job.Status != types.StatusCanceled {
+            if err := m.db.KillJob(job.ID); err != nil {
+                m.errorMsg = fmt.Sprintf("Failed to kill job: %v", err)
+            } else {
+                m.statusMsg = fmt.Sprintf("Killed job #%d", job.ID)
+                m.addLog("WARN", fmt.Sprintf("Killed job #%d (%s)", job.ID, job.FileName))
+                m.workerPool.CancelJob(job.ID) // Signal worker to stop immediately
+                m.refreshData()
+            }
+        } else {
+            m.errorMsg = "Job already terminated"
+        }
+        return m, nil
+    }
 ```
 
-Update footer to show `a=add jobs` when in Queue view.
+Update `handleJobListKeys()` to work with `ViewJobs` instead of `ViewQueue`.
+
+Update footer to show when in Jobs view:
+- `a=add jobs`
+- `d=delete`
+- `k=kill`
+- `c=cancel`
+- `p=pause`
+- `enter=resume`
 
 **File:** `internal/tui/views.go`
 
-Update `renderQueue()` to show instructions:
-- Show "Press 'a' to add/queue jobs for discovered files" when queue is empty
-- Show statistics: "X files need transcoding, Y jobs queued"
+Rename `renderQueue()` to `renderJobs()` and update:
+- Change all UI text from "Queue" to "Jobs"
+- Show instructions: "Press 'a' to add/queue jobs for discovered files"
+- Show statistics: "X files need transcoding, Y jobs in queue"
+- Show job actions in help text
 
 ---
 
@@ -596,6 +715,12 @@ CREATE INDEX IF NOT EXISTS idx_jobs_heartbeat ON transcode_jobs(status, last_hea
 
 ## Success Criteria
 
+- ✅ Queue view renamed to Jobs view
+- ✅ Jobs can be created with 'a' key in Jobs view
+- ✅ Jobs can be deleted with 'd' key (only terminal states)
+- ✅ Jobs can be force-killed with 'k' key (any active job)
+- ✅ Jobs can be canceled with 'c' key (graceful)
+- ✅ Jobs can be paused/resumed with 'p'/enter keys
 - ✅ Scan can be interrupted and resumed from checkpoint
 - ✅ Jobs automatically created for files that need transcoding
 - ✅ Ctrl+C during transcode marks jobs as paused, not lost
