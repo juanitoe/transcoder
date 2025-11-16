@@ -55,7 +55,9 @@ func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
 		// Scan library
 		err := s.Scan(ctx, func(progress scanner.ScanProgress) {
 			// Send progress updates to the TUI
-			// This will be picked up by the Update() function
+			// Note: These progress updates are sent from the scanner goroutine
+			// but we can't send tea.Msg from here directly. The scanner will
+			// update its internal state which we poll via tickMsg
 		})
 
 		if err != nil {
