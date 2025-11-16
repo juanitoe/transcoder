@@ -127,11 +127,10 @@ func (m Model) renderDashboard() string {
 
 			activeJobsStr += fmt.Sprintf(
 				"Job #%d  %s\n"+
-				"    %s: %s | %s\n"+
+				"    %s | %s\n"+
 				"    %s\n\n",
 				job.ID,
 				truncateString(job.FileName, 40),
-				job.Stage,
 				statusColor.Render(string(job.Status)),
 				job.WorkerID,
 				formatProgress(job.Progress),
@@ -196,11 +195,10 @@ func (m Model) renderJobs() string {
 			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
 			activeContent += style.Render(fmt.Sprintf(
 				"%sJob #%d  %s\n"+
-				"     %s: %s | %s\n",
+				"     %s | %s\n",
 				prefix,
 				job.ID,
 				truncateString(job.FileName, 50),
-				job.Stage,
 				statusColor.Render(string(job.Status)),
 				formatProgress(job.Progress),
 			))
