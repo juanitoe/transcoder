@@ -129,7 +129,11 @@ func (db *DB) UpdateMediaFile(id int64, file *types.MediaFile) error {
 // GetMediaFileByPath retrieves a media file by its path
 func (db *DB) GetMediaFileByPath(path string) (*types.MediaFile, error) {
 	row := db.conn.QueryRow("SELECT * FROM media_files WHERE file_path = ?", path)
-	return db.scanMediaFile(row)
+	file, err := db.scanMediaFile(row)
+	if err == sql.ErrNoRows {
+		return nil, nil // File not found - this is not an error
+	}
+	return file, err
 }
 
 // CreateJob creates a new transcode job from a media file
