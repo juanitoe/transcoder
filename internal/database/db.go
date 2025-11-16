@@ -154,6 +154,9 @@ func (db *DB) CreateJob(mediaFileID int64, priority int) (int64, error) {
 }
 
 // ClaimNextJob atomically claims the next job for a worker
+// Priority order:
+// 1. Orphaned jobs (downloading/transcoding/uploading with no worker) - recovered from restart
+// 2. New queued jobs
 func (db *DB) ClaimNextJob(workerID string) (*types.TranscodeJob, error) {
 	tx, err := db.conn.Begin()
 	if err != nil {
@@ -161,31 +164,63 @@ func (db *DB) ClaimNextJob(workerID string) (*types.TranscodeJob, error) {
 	}
 	defer tx.Rollback()
 
-	// Find highest priority unclaimed job
+	var jobID int64
+
+	// First, try to claim orphaned jobs (highest priority - these are recovered jobs)
 	row := tx.QueryRow(`
 		SELECT id FROM transcode_jobs
-		WHERE status = 'queued' AND (worker_id = '' OR worker_id IS NULL)
-		ORDER BY priority DESC, created_at ASC
+		WHERE status IN ('downloading', 'transcoding', 'uploading')
+		  AND (worker_id = '' OR worker_id IS NULL)
+		ORDER BY
+		  CASE status
+		    WHEN 'uploading' THEN 1
+		    WHEN 'transcoding' THEN 2
+		    WHEN 'downloading' THEN 3
+		  END,
+		  priority DESC,
+		  created_at ASC
 		LIMIT 1
 	`)
 
-	var jobID int64
-	if err := row.Scan(&jobID); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil // No jobs available
-		}
-		return nil, fmt.Errorf("failed to find job: %w", err)
+	err = row.Scan(&jobID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to find orphaned job: %w", err)
 	}
 
-	// Claim the job
-	_, err = tx.Exec(`
-		UPDATE transcode_jobs
-		SET status = 'downloading',
-		    worker_id = ?,
-		    transcode_started_at = CURRENT_TIMESTAMP,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, workerID, jobID)
+	// If no orphaned jobs, try to find new queued jobs
+	if err == sql.ErrNoRows {
+		row = tx.QueryRow(`
+			SELECT id FROM transcode_jobs
+			WHERE status = 'queued' AND (worker_id = '' OR worker_id IS NULL)
+			ORDER BY priority DESC, created_at ASC
+			LIMIT 1
+		`)
+
+		if err := row.Scan(&jobID); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, nil // No jobs available
+			}
+			return nil, fmt.Errorf("failed to find queued job: %w", err)
+		}
+
+		// For new queued jobs, set status to downloading and timestamp
+		_, err = tx.Exec(`
+			UPDATE transcode_jobs
+			SET status = 'downloading',
+			    worker_id = ?,
+			    transcode_started_at = CURRENT_TIMESTAMP,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, workerID, jobID)
+	} else {
+		// For orphaned jobs, just assign worker (keep existing status and progress)
+		_, err = tx.Exec(`
+			UPDATE transcode_jobs
+			SET worker_id = ?,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, workerID, jobID)
+	}
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to claim job: %w", err)
@@ -354,32 +389,47 @@ func (db *DB) DeleteJob(jobID int64) error {
 }
 
 // RecoverJobs recovers jobs from an unclean shutdown
-// - Resets orphaned jobs (in-progress jobs from previous run) back to queued
-// - Resumes paused jobs
+// - Clears worker_id from orphaned jobs (in-progress jobs from previous run)
+// - Jobs keep their current status and progress
+// - They will be picked up by ClaimNextJob() which prioritizes orphaned jobs
 // Returns the number of jobs recovered
 func (db *DB) RecoverJobs() (int, error) {
-	// Reset orphaned jobs (downloading, transcoding, uploading without a worker)
-	// These were in progress when the app shut down
-	result, err := db.conn.Exec(`
+	// Clear worker_id from orphaned jobs but keep status and progress
+	// For downloading jobs: reset progress to 0 (need to re-download)
+	result1, err := db.conn.Exec(`
 		UPDATE transcode_jobs
-		SET status = 'queued',
-		    stage = '',
+		SET worker_id = '',
 		    progress = 0,
-		    worker_id = '',
-		    error_message = 'Job recovered after restart',
+		    error_message = 'Job recovered after restart - will resume download',
 		    updated_at = CURRENT_TIMESTAMP
-		WHERE status IN ('downloading', 'transcoding', 'uploading')
+		WHERE status = 'downloading'
 	`)
 	if err != nil {
-		return 0, fmt.Errorf("failed to recover orphaned jobs: %w", err)
+		return 0, fmt.Errorf("failed to recover downloading jobs: %w", err)
 	}
 
-	orphanedCount, _ := result.RowsAffected()
+	downloadingCount, _ := result1.RowsAffected()
+
+	// For transcoding/uploading jobs: keep progress and status
+	result2, err := db.conn.Exec(`
+		UPDATE transcode_jobs
+		SET worker_id = '',
+		    error_message = 'Job recovered after restart - will resume from checkpoint',
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE status IN ('transcoding', 'uploading')
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to recover transcoding/uploading jobs: %w", err)
+	}
+
+	transcodingCount, _ := result2.RowsAffected()
+
+	totalRecovered := int(downloadingCount + transcodingCount)
 
 	// Note: We don't automatically resume paused jobs
 	// The user can manually resume them if needed
 
-	return int(orphanedCount), nil
+	return totalRecovered, nil
 }
 
 // QueueJobsForTranscoding creates transcode jobs for all media files

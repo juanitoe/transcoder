@@ -16,10 +16,9 @@ func (m Model) renderHeader() string {
 	tabs := []string{
 		"[1] Dashboard",
 		"[2] Jobs",
-		"[3] History",
-		"[4] Settings",
-		"[5] Scanner",
-		"[6] Logs",
+		"[3] Settings",
+		"[4] Scanner",
+		"[5] Logs",
 	}
 
 	// Highlight active tab

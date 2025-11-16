@@ -21,7 +21,6 @@ type ViewMode int
 const (
 	ViewDashboard ViewMode = iota
 	ViewJobs
-	ViewHistory
 	ViewSettings
 	ViewScanner
 	ViewLogs
@@ -188,8 +187,6 @@ func (m Model) View() string {
 		content = m.renderDashboard()
 	case ViewJobs:
 		content = m.renderJobs()
-	case ViewHistory:
-		content = m.renderHistory()
 	case ViewSettings:
 		content = m.renderSettings()
 	case ViewScanner:
@@ -242,19 +239,14 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "3":
-		m.viewMode = ViewHistory
-		m.refreshData()
-		return m, nil
-
-	case "4":
 		m.viewMode = ViewSettings
 		return m, nil
 
-	case "5":
+	case "4":
 		m.viewMode = ViewScanner
 		return m, nil
 
-	case "6":
+	case "5":
 		m.viewMode = ViewLogs
 		return m, nil
 
@@ -278,7 +270,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// View-specific keys
 	switch m.viewMode {
-	case ViewJobs, ViewHistory:
+	case ViewJobs:
 		return m.handleJobListKeys(msg)
 	case ViewSettings:
 		return m.handleSettingsKeys(msg)
@@ -291,21 +283,17 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleJobListKeys handles keys in job list views
 func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Get current job list based on view and panel
+	// Get current job list based on panel
 	var jobs []*types.TranscodeJob
 	var scrollOffset *int
 
-	if m.viewMode == ViewHistory {
-		jobs = m.recentJobs
+	// In Jobs view, switch based on panel
+	if m.jobsPanel == 0 {
+		jobs = m.activeJobs
+		scrollOffset = &m.activeJobsScrollOffset
 	} else {
-		// In Jobs view, switch based on panel
-		if m.jobsPanel == 0 {
-			jobs = m.activeJobs
-			scrollOffset = &m.activeJobsScrollOffset
-		} else {
-			jobs = m.queuedJobs
-			scrollOffset = &m.queuedJobsScrollOffset
-		}
+		jobs = m.queuedJobs
+		scrollOffset = &m.queuedJobsScrollOffset
 	}
 
 	switch msg.String() {

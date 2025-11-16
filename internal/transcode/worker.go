@@ -234,9 +234,8 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Work directory for this job
 	workDir := filepath.Join(expandPath(w.cfg.Workers.WorkDir), fmt.Sprintf("job-%d", job.ID))
-	defer os.RemoveAll(workDir) // Clean up when done
 
-	// Create work directory
+	// Create work directory if it doesn't exist
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to create work directory: %v", err))
 		return
@@ -245,16 +244,21 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	localInputPath := filepath.Join(workDir, job.FileName)
 	localOutputPath := filepath.Join(workDir, "transcoded_"+job.FileName)
 
-	// Stage 1: Download
-	w.updateProgress(job.ID, types.StageDownload, 0, "Downloading")
-	err = jobScanner.DownloadFile(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
-		progress := (float64(bytesRead) / float64(totalBytes)) * 100
-		w.updateProgress(job.ID, types.StageDownload, progress, fmt.Sprintf("Downloading: %.1f%%", progress))
-	})
+	// Stage 1: Download (skip if file already exists - recovered job)
+	if _, err := os.Stat(localInputPath); os.IsNotExist(err) {
+		w.updateProgress(job.ID, types.StageDownload, 0, "Downloading")
+		err = jobScanner.DownloadFile(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
+			progress := (float64(bytesRead) / float64(totalBytes)) * 100
+			w.updateProgress(job.ID, types.StageDownload, progress, fmt.Sprintf("Downloading: %.1f%%", progress))
+		})
 
-	if err != nil {
-		w.db.FailJob(job.ID, fmt.Sprintf("Download failed: %v", err))
-		return
+		if err != nil {
+			w.db.FailJob(job.ID, fmt.Sprintf("Download failed: %v", err))
+			return
+		}
+	} else {
+		// File already exists (recovered job), skip download
+		w.updateProgress(job.ID, types.StageDownload, 100, "Download skipped (file already exists)")
 	}
 
 	// Check if cancelled
@@ -380,6 +384,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Complete the job
 	w.db.CompleteJob(job.ID, transcodedInfo.Size, encodingTime, fps)
 	w.updateProgress(job.ID, types.StageUpload, 100, "Completed")
+
+	// Clean up work directory only after successful completion
+	os.RemoveAll(workDir)
 }
 
 // updateProgress sends a progress update
