@@ -622,13 +622,17 @@ func (db *DB) scanMediaFile(row *sql.Row) (*types.MediaFile, error) {
 func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 	job := &types.TranscodeJob{}
 	var status, stage string
+	var transcodeStartedAt, transcodeCompletedAt, lastRetryAt sql.NullTime
+	var transcodedFileSizeBytes, encodingTimeSeconds sql.NullInt64
+	var encodingFPS sql.NullFloat64
+	var verificationPassed sql.NullBool
 
 	err := row.Scan(
 		&job.ID, &job.MediaFileID, &job.FilePath, &job.FileName, &job.FileSizeBytes,
 		&status, &stage, &job.Progress, &job.WorkerID,
-		&job.TranscodeStartedAt, &job.TranscodeCompletedAt,
-		&job.TranscodedFileSizeBytes, &job.EncodingTimeSeconds, &job.EncodingFPS,
-		&job.VerificationPassed, &job.ErrorMessage, &job.RetryCount, &job.LastRetryAt,
+		&transcodeStartedAt, &transcodeCompletedAt,
+		&transcodedFileSizeBytes, &encodingTimeSeconds, &encodingFPS,
+		&verificationPassed, &job.ErrorMessage, &job.RetryCount, &lastRetryAt,
 		&job.Priority, &job.CreatedAt, &job.UpdatedAt,
 	)
 
@@ -638,6 +642,29 @@ func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 
 	job.Status = types.JobStatus(status)
 	job.Stage = types.ProcessingStage(stage)
+
+	// Handle nullable fields
+	if transcodeStartedAt.Valid {
+		job.TranscodeStartedAt = &transcodeStartedAt.Time
+	}
+	if transcodeCompletedAt.Valid {
+		job.TranscodeCompletedAt = &transcodeCompletedAt.Time
+	}
+	if transcodedFileSizeBytes.Valid {
+		job.TranscodedFileSizeBytes = transcodedFileSizeBytes.Int64
+	}
+	if encodingTimeSeconds.Valid {
+		job.EncodingTimeSeconds = int(encodingTimeSeconds.Int64)
+	}
+	if encodingFPS.Valid {
+		job.EncodingFPS = encodingFPS.Float64
+	}
+	if verificationPassed.Valid {
+		job.VerificationPassed = verificationPassed.Bool
+	}
+	if lastRetryAt.Valid {
+		job.LastRetryAt = &lastRetryAt.Time
+	}
 
 	return job, nil
 }
@@ -645,13 +672,17 @@ func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 func (db *DB) scanTranscodeJobRow(rows *sql.Rows) (*types.TranscodeJob, error) {
 	job := &types.TranscodeJob{}
 	var status, stage string
+	var transcodeStartedAt, transcodeCompletedAt, lastRetryAt sql.NullTime
+	var transcodedFileSizeBytes, encodingTimeSeconds sql.NullInt64
+	var encodingFPS sql.NullFloat64
+	var verificationPassed sql.NullBool
 
 	err := rows.Scan(
 		&job.ID, &job.MediaFileID, &job.FilePath, &job.FileName, &job.FileSizeBytes,
 		&status, &stage, &job.Progress, &job.WorkerID,
-		&job.TranscodeStartedAt, &job.TranscodeCompletedAt,
-		&job.TranscodedFileSizeBytes, &job.EncodingTimeSeconds, &job.EncodingFPS,
-		&job.VerificationPassed, &job.ErrorMessage, &job.RetryCount, &job.LastRetryAt,
+		&transcodeStartedAt, &transcodeCompletedAt,
+		&transcodedFileSizeBytes, &encodingTimeSeconds, &encodingFPS,
+		&verificationPassed, &job.ErrorMessage, &job.RetryCount, &lastRetryAt,
 		&job.Priority, &job.CreatedAt, &job.UpdatedAt,
 	)
 
@@ -661,6 +692,29 @@ func (db *DB) scanTranscodeJobRow(rows *sql.Rows) (*types.TranscodeJob, error) {
 
 	job.Status = types.JobStatus(status)
 	job.Stage = types.ProcessingStage(stage)
+
+	// Handle nullable fields
+	if transcodeStartedAt.Valid {
+		job.TranscodeStartedAt = &transcodeStartedAt.Time
+	}
+	if transcodeCompletedAt.Valid {
+		job.TranscodeCompletedAt = &transcodeCompletedAt.Time
+	}
+	if transcodedFileSizeBytes.Valid {
+		job.TranscodedFileSizeBytes = transcodedFileSizeBytes.Int64
+	}
+	if encodingTimeSeconds.Valid {
+		job.EncodingTimeSeconds = int(encodingTimeSeconds.Int64)
+	}
+	if encodingFPS.Valid {
+		job.EncodingFPS = encodingFPS.Float64
+	}
+	if verificationPassed.Valid {
+		job.VerificationPassed = verificationPassed.Bool
+	}
+	if lastRetryAt.Valid {
+		job.LastRetryAt = &lastRetryAt.Time
+	}
 
 	return job, nil
 }
