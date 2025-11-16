@@ -375,11 +375,12 @@ func (db *DB) RecoverJobs() (int, error) {
 // that should be transcoded but don't already have a job
 func (db *DB) QueueJobsForTranscoding(limit int) (int, error) {
 	// Find media files that need transcoding and don't have existing jobs
+	// Exclude completed, canceled, and failed jobs to allow re-queueing of failed files
 	query := `
 		SELECT mf.id, mf.file_path, mf.file_name, mf.file_size_bytes, mf.transcoding_priority
 		FROM media_files mf
 		LEFT JOIN transcode_jobs tj ON mf.id = tj.media_file_id
-		    AND tj.status NOT IN ('completed', 'canceled')
+		    AND tj.status NOT IN ('completed', 'canceled', 'failed')
 		WHERE mf.should_transcode = 1
 		    AND tj.id IS NULL
 		ORDER BY mf.transcoding_priority DESC, mf.file_size_bytes DESC
