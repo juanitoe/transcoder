@@ -1,0 +1,36 @@
+# Binaries
+transcoder
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Database files
+*.db
+*.db-*
+
+# Logs
+*.log
+
+# Temp/work directories
+transcoder_temp/
+work/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Config files with secrets
+config.local.yaml
+*.local.yaml
