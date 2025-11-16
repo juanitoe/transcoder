@@ -25,13 +25,36 @@ type Scanner struct {
 	sshClient  *ssh.Client
 	sftpClient *sftp.Client
 	progress   ScanProgress
+	logFile    *os.File
 }
 
 // New creates a new Scanner instance
 func New(cfg *config.Config, db *database.DB) (*Scanner, error) {
+	// Open log file
+	logPath := os.ExpandEnv(cfg.Logging.ScannerLog)
+	if strings.HasPrefix(logPath, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get home directory: %w", err)
+		}
+		logPath = filepath.Join(home, logPath[2:])
+	}
+
+	// Ensure log directory exists
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	// Open log file in append mode
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+
 	return &Scanner{
-		cfg: cfg,
-		db:  db,
+		cfg:     cfg,
+		db:      db,
+		logFile: logFile,
 	}, nil
 }
 
@@ -43,7 +66,7 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	// Try SSH agent
 	if agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
 		authMethods = append(authMethods, ssh.PublicKeysCallback(agent.NewClient(agentConn).Signers))
-		fmt.Println("DEBUG: Using SSH agent for authentication")
+		s.logDebug("Using SSH agent for authentication")
 	}
 
 	// Try loading key file if agent failed or as fallback
@@ -57,7 +80,7 @@ func (s *Scanner) Connect(ctx context.Context) error {
 			keyPath = filepath.Join(home, keyPath[2:])
 		}
 
-		fmt.Printf("DEBUG: Loading SSH key from: %s\n", keyPath)
+		s.logDebug("Loading SSH key from: %s", keyPath)
 
 		// Read private key
 		keyBytes, err := os.ReadFile(keyPath)
@@ -72,7 +95,7 @@ func (s *Scanner) Connect(ctx context.Context) error {
 		}
 
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
-		fmt.Println("DEBUG: Using SSH key file for authentication")
+		s.logDebug("Using SSH key file for authentication")
 	}
 
 	// Configure SSH client
@@ -85,23 +108,23 @@ func (s *Scanner) Connect(ctx context.Context) error {
 
 	// Connect to SSH server
 	addr := fmt.Sprintf("%s:%d", s.cfg.Remote.Host, s.cfg.Remote.Port)
-	fmt.Printf("DEBUG: Connecting to SSH server: %s@%s\n", s.cfg.Remote.User, addr)
+	s.logDebug("Connecting to SSH server: %s@%s", s.cfg.Remote.User, addr)
 	sshClient, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %w", err)
 	}
 	s.sshClient = sshClient
-	fmt.Println("DEBUG: SSH connection established")
+	s.logDebug("SSH connection established")
 
 	// Create SFTP client
-	fmt.Println("DEBUG: Creating SFTP client")
+	s.logDebug("Creating SFTP client")
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		s.sshClient.Close()
 		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
 	s.sftpClient = sftpClient
-	fmt.Println("DEBUG: SFTP client created successfully")
+	s.logDebug("SFTP client created successfully")
 
 	return nil
 }
@@ -113,6 +136,9 @@ func (s *Scanner) Close() error {
 	}
 	if s.sshClient != nil {
 		s.sshClient.Close()
+	}
+	if s.logFile != nil {
+		s.logFile.Close()
 	}
 	return nil
 }
@@ -139,16 +165,16 @@ func (s *Scanner) Scan(ctx context.Context, progressCb ProgressCallback) error {
 
 	var totalProgress ScanProgress
 
-	fmt.Printf("DEBUG: Starting scan of %d media paths\n", len(s.cfg.Remote.MediaPaths))
+	s.logDebug("Starting scan of %d media paths", len(s.cfg.Remote.MediaPaths))
 	for _, mediaPath := range s.cfg.Remote.MediaPaths {
-		fmt.Printf("DEBUG: Scanning path: %s\n", mediaPath)
+		s.logDebug("Scanning path: %s", mediaPath)
 		err := s.scanPath(ctx, mediaPath, &totalProgress, progressCb)
 		if err != nil {
 			return fmt.Errorf("failed to scan %s: %w", mediaPath, err)
 		}
 	}
 
-	fmt.Printf("DEBUG: Scan complete - %d files scanned, %d added, %d updated\n",
+	s.logDebug("Scan complete - %d files scanned, %d added, %d updated",
 		totalProgress.FilesScanned, totalProgress.FilesAdded, totalProgress.FilesUpdated)
 	return nil
 }
@@ -199,21 +225,21 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 			// Process video file
 			progress.FilesScanned++
 			progress.BytesScanned += entry.Size()
-			fmt.Printf("DEBUG: Found video file: %s (%d bytes)\n", fullPath, entry.Size())
+			s.logDebug("Found video file: %s (%d bytes)", fullPath, entry.Size())
 
 			// Extract metadata
-			fmt.Printf("DEBUG: Extracting metadata from: %s\n", fullPath)
+			s.logDebug("Extracting metadata from: %s", fullPath)
 			metadata, err := s.extractMetadata(ctx, fullPath)
 			if err != nil {
 				progress.ErrorCount++
 				progress.LastError = fmt.Errorf("failed to extract metadata from %s: %w", fullPath, err)
-				fmt.Printf("DEBUG: Metadata extraction failed: %v\n", err)
+				s.logDebug("Metadata extraction failed: %v", err)
 				if progressCb != nil {
 					progressCb(*progress)
 				}
 				continue
 			}
-			fmt.Printf("DEBUG: Metadata extracted successfully: codec=%s, resolution=%dx%d\n",
+			s.logDebug("Metadata extracted successfully: codec=%s, resolution=%dx%d",
 				metadata.Codec, metadata.ResolutionWidth, metadata.ResolutionHeight)
 
 			// Check if file exists in database
@@ -439,4 +465,17 @@ func (s *Scanner) DeleteRemoteFile(remotePath string) error {
 // GetProgress returns the current scan progress
 func (s *Scanner) GetProgress() ScanProgress {
 	return s.progress
+}
+
+// logDebug writes a debug message to the log file
+func (s *Scanner) logDebug(format string, args ...interface{}) {
+	if s.logFile == nil {
+		return
+	}
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	message := fmt.Sprintf(format, args...)
+	logLine := fmt.Sprintf("[%s] DEBUG: %s\n", timestamp, message)
+
+	s.logFile.WriteString(logLine)
 }

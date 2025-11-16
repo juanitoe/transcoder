@@ -46,8 +46,9 @@ type DatabaseConfig struct {
 
 // LoggingConfig contains logging settings
 type LoggingConfig struct {
-	Level string `yaml:"level"` // debug, info, warn, error
-	File  string `yaml:"file"`  // Log file path
+	Level      string `yaml:"level"`       // debug, info, warn, error
+	File       string `yaml:"file"`        // Log file path
+	ScannerLog string `yaml:"scanner_log"` // Scanner debug log file path
 }
 
 // Load reads configuration from a YAML file
@@ -123,6 +124,11 @@ func (c *Config) applyDefaults() {
 	if c.Logging.File == "" {
 		home, _ := os.UserHomeDir()
 		c.Logging.File = filepath.Join(home, "transcoder", "transcoder.log")
+	}
+
+	if c.Logging.ScannerLog == "" {
+		home, _ := os.UserHomeDir()
+		c.Logging.ScannerLog = filepath.Join(home, "transcoder", "scanner.log")
 	}
 }
 

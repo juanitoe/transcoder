@@ -61,17 +61,17 @@ func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath strin
 		filePath,
 	}
 
-	fmt.Printf("DEBUG: Running ffprobe via SSH: %v\n", sshCmd)
+	s.logDebug("Running ffprobe via SSH: %v", sshCmd)
 	cmd := exec.CommandContext(ctx, sshCmd[0], sshCmd[1:]...)
 
 	// Execute command
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("DEBUG: ffprobe command failed: %v\n", err)
-		fmt.Printf("DEBUG: ffprobe output: %s\n", string(output))
+		s.logDebug("ffprobe command failed: %v", err)
+		s.logDebug("ffprobe output: %s", string(output))
 		return nil, fmt.Errorf("ffprobe failed: %w", err)
 	}
-	fmt.Printf("DEBUG: ffprobe succeeded, output length: %d bytes\n", len(output))
+	s.logDebug("ffprobe succeeded, output length: %d bytes", len(output))
 
 	// Parse JSON output
 	var probe FFprobeOutput

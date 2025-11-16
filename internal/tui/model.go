@@ -61,22 +61,35 @@ type Model struct {
 	configModified bool
 
 	// Logs
-	logs           []string
-	maxLogs        int
+	logs            []string
+	maxLogs         int
 	logScrollOffset int
+	scannerLogPath  string
+	scannerLogPos   int64
 }
 
 // New creates a new TUI model
 func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPool *transcode.WorkerPool) Model {
+	// Expand scanner log path
+	scannerLogPath := os.ExpandEnv(cfg.Logging.ScannerLog)
+	if strings.HasPrefix(scannerLogPath, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			scannerLogPath = strings.Replace(scannerLogPath, "~", home, 1)
+		}
+	}
+
 	m := Model{
-		cfg:        cfg,
-		db:         db,
-		scanner:    scanner,
-		workerPool: workerPool,
-		viewMode:   ViewDashboard,
-		lastUpdate: time.Now(),
-		logs:       make([]string, 0),
-		maxLogs:    200,
+		cfg:            cfg,
+		db:             db,
+		scanner:        scanner,
+		workerPool:     workerPool,
+		viewMode:       ViewDashboard,
+		lastUpdate:     time.Now(),
+		logs:           make([]string, 0),
+		maxLogs:        200,
+		scannerLogPath: scannerLogPath,
+		scannerLogPos:  0,
 	}
 	m.addLog("INFO", "Transcoder TUI started")
 	return m
@@ -118,6 +131,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+
+		// Tail scanner log file
+		m.tailScannerLog()
 
 		return m, tickCmd()
 
@@ -587,6 +603,58 @@ func (m *Model) addLog(level, message string) {
 	logEntry := fmt.Sprintf("[%s] %s: %s", timestamp, level, message)
 
 	m.logs = append(m.logs, logEntry)
+
+	// Keep only the last maxLogs entries
+	if len(m.logs) > m.maxLogs {
+		m.logs = m.logs[len(m.logs)-m.maxLogs:]
+	}
+}
+
+// tailScannerLog reads new lines from the scanner log file and adds them to logs
+func (m *Model) tailScannerLog() {
+	// Check if log file exists
+	fileInfo, err := os.Stat(m.scannerLogPath)
+	if err != nil {
+		return // File doesn't exist yet
+	}
+
+	// Check if file has shrunk (rotated or truncated)
+	if fileInfo.Size() < m.scannerLogPos {
+		m.scannerLogPos = 0
+	}
+
+	// Open file
+	file, err := os.Open(m.scannerLogPath)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	// Seek to last position
+	_, err = file.Seek(m.scannerLogPos, 0)
+	if err != nil {
+		return
+	}
+
+	// Read new content
+	content := make([]byte, fileInfo.Size()-m.scannerLogPos)
+	n, err := file.Read(content)
+	if err != nil && n == 0 {
+		return
+	}
+
+	// Update position
+	m.scannerLogPos += int64(n)
+
+	// Split into lines and add to logs
+	lines := strings.Split(string(content[:n]), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			// Add line directly (it already has timestamp and level from scanner)
+			m.logs = append(m.logs, line)
+		}
+	}
 
 	// Keep only the last maxLogs entries
 	if len(m.logs) > m.maxLogs {
