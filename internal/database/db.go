@@ -294,6 +294,97 @@ func (db *DB) CancelJob(jobID int64) error {
 	return err
 }
 
+// KillJob immediately cancels a job and marks it as canceled
+// Unlike CancelJob, this forces termination regardless of state
+func (db *DB) KillJob(jobID int64) error {
+	query := `
+		UPDATE transcode_jobs
+		SET status = 'canceled',
+		    error_message = 'Job killed by user',
+		    worker_id = '',
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+		    AND status NOT IN ('completed', 'failed', 'canceled')
+	`
+
+	result, err := db.conn.Exec(query, jobID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("job not found or already terminated")
+	}
+
+	return nil
+}
+
+// DeleteJob permanently deletes a job from the database
+// Only allowed for jobs in terminal states (queued, failed, completed, canceled)
+func (db *DB) DeleteJob(jobID int64) error {
+	query := `
+		DELETE FROM transcode_jobs
+		WHERE id = ?
+		    AND status IN ('queued', 'failed', 'completed', 'canceled')
+	`
+
+	result, err := db.conn.Exec(query, jobID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("job not found or cannot be deleted (may be in progress)")
+	}
+
+	return nil
+}
+
+// QueueJobsForTranscoding creates transcode jobs for all media files
+// that should be transcoded but don't already have a job
+func (db *DB) QueueJobsForTranscoding(limit int) (int, error) {
+	// Find media files that need transcoding and don't have existing jobs
+	query := `
+		SELECT mf.id, mf.file_path, mf.file_name, mf.file_size_bytes, mf.transcoding_priority
+		FROM media_files mf
+		LEFT JOIN transcode_jobs tj ON mf.id = tj.media_file_id
+		    AND tj.status NOT IN ('completed', 'canceled')
+		WHERE mf.should_transcode = 1
+		    AND tj.id IS NULL
+		ORDER BY mf.transcoding_priority DESC, mf.file_size_bytes DESC
+		LIMIT ?
+	`
+
+	rows, err := db.conn.Query(query, limit)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var mediaFileID int64
+		var filePath, fileName string
+		var fileSizeBytes int64
+		var priority int
+
+		if err := rows.Scan(&mediaFileID, &filePath, &fileName, &fileSizeBytes, &priority); err != nil {
+			return count, err
+		}
+
+		// Create job with priority from media file
+		_, err := db.CreateJob(mediaFileID, priority)
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+
+	return count, nil
+}
+
 // UpdateJobPriority updates a job's priority
 func (db *DB) UpdateJobPriority(jobID int64, priority int) error {
 	_, err := db.conn.Exec(`
