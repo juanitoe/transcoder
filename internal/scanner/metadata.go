@@ -47,18 +47,19 @@ type FFprobeStream struct {
 func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath string) (*types.MediaFile, error) {
 	// Build ffprobe command
 	// We use SSH to run ffprobe on the remote server
+	// Need to properly escape the file path for the remote shell
 	sshKey := expandPath(s.cfg.Remote.SSHKey)
+
+	// Escape single quotes in the path and wrap in single quotes
+	escapedPath := strings.ReplaceAll(filePath, "'", "'\\''")
+	remoteCmd := fmt.Sprintf("ffprobe -v quiet -print_format json -show_format -show_streams '%s'", escapedPath)
+
 	sshCmd := []string{
 		"ssh",
 		"-p", strconv.Itoa(s.cfg.Remote.Port),
 		"-i", sshKey,
 		fmt.Sprintf("%s@%s", s.cfg.Remote.User, s.cfg.Remote.Host),
-		"ffprobe",
-		"-v", "quiet",
-		"-print_format", "json",
-		"-show_format",
-		"-show_streams",
-		filePath,
+		remoteCmd,
 	}
 
 	s.logDebug("Running ffprobe via SSH: %v", sshCmd)
