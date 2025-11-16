@@ -1,0 +1,24 @@
+remote:
+  host: plex.example.com
+  user: plex
+  ssh_key: ~/.ssh/id_rsa
+  port: 22
+  media_paths:
+    - /var/lib/plexmediaserver/Movies
+    - /var/lib/plexmediaserver/TV Shows
+
+encoder:
+  codec: hevc_videotoolbox
+  quality: 75
+  preset: medium
+
+workers:
+  max_workers: 2
+  work_dir: ~/transcoder_temp
+
+database:
+  path: ~/transcoder/transcoder.db
+
+logging:
+  level: info
+  file: ~/transcoder/transcoder.log
