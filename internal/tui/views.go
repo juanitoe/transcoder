@@ -212,10 +212,10 @@ func (m Model) renderJobs() string {
 
 			activeContent += style.Render(fmt.Sprintf(
 				"%sJob #%d  %s\n"+
-				"     %s%s | %s\n",
+				"      %s%s  •  %s\n\n",
 				prefix,
 				job.ID,
-				truncateString(job.FileName, 50),
+				truncateString(job.FileName, 60),
 				statusColor.Render(string(job.Status)),
 				sizeInfo,
 				formatProgress(job.Progress),
@@ -264,10 +264,10 @@ func (m Model) renderJobs() string {
 
 			queuedContent += style.Render(fmt.Sprintf(
 				"%s[%d] %s\n"+
-				"     %s  •  Pri: %d\n",
+				"      %s  •  Pri: %d\n\n",
 				prefix,
 				job.ID,
-				truncateString(job.FileName, 50),
+				truncateString(job.FileName, 60),
 				formatBytes(job.FileSizeBytes),
 				job.Priority,
 			))
