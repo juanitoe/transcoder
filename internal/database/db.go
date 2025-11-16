@@ -216,13 +216,13 @@ func (db *DB) UpdateJobStatus(jobID int64, status types.JobStatus, stage types.P
 	return err
 }
 
-// UpdateJobProgress updates only the progress field
-func (db *DB) UpdateJobProgress(jobID int64, progress float64, fps float64) error {
+// UpdateJobProgress updates the progress, stage, and fps fields
+func (db *DB) UpdateJobProgress(jobID int64, progress float64, fps float64, stage string) error {
 	_, err := db.conn.Exec(`
 		UPDATE transcode_jobs
-		SET progress = ?, encoding_fps = ?, updated_at = CURRENT_TIMESTAMP
+		SET progress = ?, encoding_fps = ?, stage = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, progress, fps, jobID)
+	`, progress, fps, stage, jobID)
 
 	return err
 }

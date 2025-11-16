@@ -364,8 +364,8 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 // updateProgress sends a progress update
 func (w *Worker) updateProgress(jobID int64, stage types.ProcessingStage, progress float64, message string) {
-	// Update database
-	w.db.UpdateJobProgress(jobID, progress, 0.0)
+	// Update database with stage
+	w.db.UpdateJobProgress(jobID, progress, 0.0, string(stage))
 
 	// Send to progress channel
 	select {
