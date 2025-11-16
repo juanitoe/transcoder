@@ -47,9 +47,11 @@ type FFprobeStream struct {
 func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath string) (*types.MediaFile, error) {
 	// Build ffprobe command
 	// We use SSH to run ffprobe on the remote server
-	cmd := exec.CommandContext(ctx, "ssh",
+	sshKey := expandPath(s.cfg.Remote.SSHKey)
+	sshCmd := []string{
+		"ssh",
 		"-p", strconv.Itoa(s.cfg.Remote.Port),
-		"-i", expandPath(s.cfg.Remote.SSHKey),
+		"-i", sshKey,
 		fmt.Sprintf("%s@%s", s.cfg.Remote.User, s.cfg.Remote.Host),
 		"ffprobe",
 		"-v", "quiet",
@@ -57,13 +59,19 @@ func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath strin
 		"-show_format",
 		"-show_streams",
 		filePath,
-	)
+	}
+
+	fmt.Printf("DEBUG: Running ffprobe via SSH: %v\n", sshCmd)
+	cmd := exec.CommandContext(ctx, sshCmd[0], sshCmd[1:]...)
 
 	// Execute command
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		fmt.Printf("DEBUG: ffprobe command failed: %v\n", err)
+		fmt.Printf("DEBUG: ffprobe output: %s\n", string(output))
 		return nil, fmt.Errorf("ffprobe failed: %w", err)
 	}
+	fmt.Printf("DEBUG: ffprobe succeeded, output length: %d bytes\n", len(output))
 
 	// Parse JSON output
 	var probe FFprobeOutput

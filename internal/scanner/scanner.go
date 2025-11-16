@@ -43,6 +43,7 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	// Try SSH agent
 	if agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
 		authMethods = append(authMethods, ssh.PublicKeysCallback(agent.NewClient(agentConn).Signers))
+		fmt.Println("DEBUG: Using SSH agent for authentication")
 	}
 
 	// Try loading key file if agent failed or as fallback
@@ -55,6 +56,8 @@ func (s *Scanner) Connect(ctx context.Context) error {
 			}
 			keyPath = filepath.Join(home, keyPath[2:])
 		}
+
+		fmt.Printf("DEBUG: Loading SSH key from: %s\n", keyPath)
 
 		// Read private key
 		keyBytes, err := os.ReadFile(keyPath)
@@ -69,6 +72,7 @@ func (s *Scanner) Connect(ctx context.Context) error {
 		}
 
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
+		fmt.Println("DEBUG: Using SSH key file for authentication")
 	}
 
 	// Configure SSH client
@@ -81,19 +85,23 @@ func (s *Scanner) Connect(ctx context.Context) error {
 
 	// Connect to SSH server
 	addr := fmt.Sprintf("%s:%d", s.cfg.Remote.Host, s.cfg.Remote.Port)
+	fmt.Printf("DEBUG: Connecting to SSH server: %s@%s\n", s.cfg.Remote.User, addr)
 	sshClient, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SSH server: %w", err)
 	}
 	s.sshClient = sshClient
+	fmt.Println("DEBUG: SSH connection established")
 
 	// Create SFTP client
+	fmt.Println("DEBUG: Creating SFTP client")
 	sftpClient, err := sftp.NewClient(sshClient)
 	if err != nil {
 		s.sshClient.Close()
 		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
 	s.sftpClient = sftpClient
+	fmt.Println("DEBUG: SFTP client created successfully")
 
 	return nil
 }
@@ -131,13 +139,17 @@ func (s *Scanner) Scan(ctx context.Context, progressCb ProgressCallback) error {
 
 	var totalProgress ScanProgress
 
+	fmt.Printf("DEBUG: Starting scan of %d media paths\n", len(s.cfg.Remote.MediaPaths))
 	for _, mediaPath := range s.cfg.Remote.MediaPaths {
+		fmt.Printf("DEBUG: Scanning path: %s\n", mediaPath)
 		err := s.scanPath(ctx, mediaPath, &totalProgress, progressCb)
 		if err != nil {
 			return fmt.Errorf("failed to scan %s: %w", mediaPath, err)
 		}
 	}
 
+	fmt.Printf("DEBUG: Scan complete - %d files scanned, %d added, %d updated\n",
+		totalProgress.FilesScanned, totalProgress.FilesAdded, totalProgress.FilesUpdated)
 	return nil
 }
 
@@ -187,17 +199,22 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 			// Process video file
 			progress.FilesScanned++
 			progress.BytesScanned += entry.Size()
+			fmt.Printf("DEBUG: Found video file: %s (%d bytes)\n", fullPath, entry.Size())
 
 			// Extract metadata
+			fmt.Printf("DEBUG: Extracting metadata from: %s\n", fullPath)
 			metadata, err := s.extractMetadata(ctx, fullPath)
 			if err != nil {
 				progress.ErrorCount++
 				progress.LastError = fmt.Errorf("failed to extract metadata from %s: %w", fullPath, err)
+				fmt.Printf("DEBUG: Metadata extraction failed: %v\n", err)
 				if progressCb != nil {
 					progressCb(*progress)
 				}
 				continue
 			}
+			fmt.Printf("DEBUG: Metadata extracted successfully: codec=%s, resolution=%dx%d\n",
+				metadata.VideoCodec, metadata.Width, metadata.Height)
 
 			// Check if file exists in database
 			existing, err := s.db.GetMediaFileByPath(fullPath)
