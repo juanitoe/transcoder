@@ -19,6 +19,7 @@ func (m Model) renderHeader() string {
 		"[3] History",
 		"[4] Settings",
 		"[5] Scanner",
+		"[6] Logs",
 	}
 
 	// Highlight active tab
@@ -330,7 +331,7 @@ func (m Model) renderHelp() string {
 	help := boxStyle.Render(
 		"⌨️  Keyboard Shortcuts\n\n" +
 			"Global:\n" +
-			"  [1-5]         Switch views\n" +
+			"  [1-6]         Switch views\n" +
 			"  [h/?]         Toggle help\n" +
 			"  [r]           Refresh data\n" +
 			"  [s]           Start library scan\n" +
@@ -345,6 +346,71 @@ func (m Model) renderHelp() string {
 	)
 
 	return help
+}
+
+// renderLogs renders the logs view with scrolling
+func (m Model) renderLogs() string {
+	content := "📝 Application Logs\n\n"
+
+	if len(m.logs) == 0 {
+		content += statusStyle.Render("No logs yet")
+		return boxStyle.Render(content)
+	}
+
+	// Calculate how many logs we can display based on available height
+	// Approximate: 2 lines for title, 2 for box borders, 3 for footer/header
+	availableHeight := m.height - 7
+	if availableHeight < 1 {
+		availableHeight = 10 // Fallback minimum
+	}
+
+	// Calculate the window of logs to display based on scroll offset
+	totalLogs := len(m.logs)
+	startIdx := m.logScrollOffset
+	endIdx := startIdx + availableHeight
+
+	// Bounds checking
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx > totalLogs {
+		endIdx = totalLogs
+	}
+	if startIdx >= totalLogs {
+		startIdx = max(0, totalLogs-availableHeight)
+	}
+
+	// Display log entries
+	for i := startIdx; i < endIdx; i++ {
+		logEntry := m.logs[i]
+
+		// Color code based on log level
+		var style lipgloss.Style
+		if strings.Contains(logEntry, "ERROR") {
+			style = errorStyle
+		} else if strings.Contains(logEntry, "WARN") {
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("208")) // Orange
+		} else if strings.Contains(logEntry, "INFO") {
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("42")) // Green
+		} else {
+			style = statusStyle
+		}
+
+		content += style.Render(logEntry) + "\n"
+	}
+
+	// Add scroll indicator
+	if totalLogs > availableHeight {
+		scrollInfo := fmt.Sprintf("\n%s (Showing %d-%d of %d logs)",
+			helpStyle.Render("↑/↓ to scroll"),
+			startIdx+1,
+			endIdx,
+			totalLogs,
+		)
+		content += scrollInfo
+	}
+
+	return boxStyle.Render(content)
 }
 
 func max(a, b int) int {

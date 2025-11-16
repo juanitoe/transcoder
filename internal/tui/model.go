@@ -24,6 +24,7 @@ const (
 	ViewHistory
 	ViewSettings
 	ViewScanner
+	ViewLogs
 )
 
 // Model is the Bubble Tea model for the TUI
@@ -58,18 +59,27 @@ type Model struct {
 	// Keyboard hints
 	showHelp       bool
 	configModified bool
+
+	// Logs
+	logs           []string
+	maxLogs        int
+	logScrollOffset int
 }
 
 // New creates a new TUI model
 func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPool *transcode.WorkerPool) Model {
-	return Model{
+	m := Model{
 		cfg:        cfg,
 		db:         db,
 		scanner:    scanner,
 		workerPool: workerPool,
 		viewMode:   ViewDashboard,
 		lastUpdate: time.Now(),
+		logs:       make([]string, 0),
+		maxLogs:    200,
 	}
+	m.addLog("INFO", "Transcoder TUI started")
+	return m
 }
 
 // Init initializes the model
@@ -109,6 +119,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated)
 		if m.scanProgress.LastError != nil {
 			m.errorMsg = fmt.Sprintf("Scan error: %v", m.scanProgress.LastError)
+			m.addLog("ERROR", fmt.Sprintf("Scan error: %v", m.scanProgress.LastError))
 		}
 		return m, nil
 
@@ -116,11 +127,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scanning = false
 		m.statusMsg = fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated",
 			m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated)
+		m.addLog("INFO", fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated",
+			m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated))
 		m.refreshData()
 		return m, nil
 
 	case errorMsg:
 		m.errorMsg = string(msg)
+		m.addLog("ERROR", string(msg))
 		m.scanning = false // Stop scanning on error
 		return m, nil
 	}
@@ -147,6 +161,8 @@ func (m Model) View() string {
 		content = m.renderSettings()
 	case ViewScanner:
 		content = m.renderScanner()
+	case ViewLogs:
+		content = m.renderLogs()
 	default:
 		content = m.renderDashboard()
 	}
@@ -205,12 +221,17 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewScanner
 		return m, nil
 
+	case "6":
+		m.viewMode = ViewLogs
+		return m, nil
+
 	case "s":
 		// Start scan
 		if !m.scanning {
 			m.scanning = true
 			m.statusMsg = "Starting scan..."
 			m.errorMsg = "" // Clear any previous errors
+			m.addLog("INFO", "Starting library scan")
 			return m, scanLibrary(m.scanner, m.db)
 		}
 		return m, nil
@@ -228,6 +249,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleJobListKeys(msg)
 	case ViewSettings:
 		return m.handleSettingsKeys(msg)
+	case ViewLogs:
+		return m.handleLogsKeys(msg)
 	}
 
 	return m, nil
@@ -350,6 +373,56 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusMsg = "Configuration saved!"
 			m.configModified = false
+		}
+	}
+
+	return m, nil
+}
+
+// handleLogsKeys handles keys in logs view
+func (m Model) handleLogsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Calculate available height for logs
+	availableHeight := m.height - 7
+	if availableHeight < 1 {
+		availableHeight = 10
+	}
+
+	maxScrollOffset := len(m.logs) - availableHeight
+	if maxScrollOffset < 0 {
+		maxScrollOffset = 0
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.logScrollOffset > 0 {
+			m.logScrollOffset--
+		}
+
+	case "down", "j":
+		if m.logScrollOffset < maxScrollOffset {
+			m.logScrollOffset++
+		}
+
+	case "home", "g":
+		// Jump to top
+		m.logScrollOffset = 0
+
+	case "end", "G":
+		// Jump to bottom
+		m.logScrollOffset = maxScrollOffset
+
+	case "pageup":
+		// Scroll up one page
+		m.logScrollOffset -= availableHeight
+		if m.logScrollOffset < 0 {
+			m.logScrollOffset = 0
+		}
+
+	case "pagedown":
+		// Scroll down one page
+		m.logScrollOffset += availableHeight
+		if m.logScrollOffset > maxScrollOffset {
+			m.logScrollOffset = maxScrollOffset
 		}
 	}
 
@@ -491,5 +564,18 @@ func statusColor(status types.JobStatus) lipgloss.Color {
 		return lipgloss.Color("240")
 	default:
 		return lipgloss.Color("240")
+	}
+}
+
+// addLog adds a log entry with timestamp and level
+func (m *Model) addLog(level, message string) {
+	timestamp := time.Now().Format("15:04:05")
+	logEntry := fmt.Sprintf("[%s] %s: %s", timestamp, level, message)
+
+	m.logs = append(m.logs, logEntry)
+
+	// Keep only the last maxLogs entries
+	if len(m.logs) > m.maxLogs {
+		m.logs = m.logs[len(m.logs)-m.maxLogs:]
 	}
 }

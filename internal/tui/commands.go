@@ -54,7 +54,8 @@ func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
 
 		// Scan library
 		err := s.Scan(ctx, func(progress scanner.ScanProgress) {
-			// Progress updates will be handled by the model
+			// Send progress updates to the TUI
+			// This will be picked up by the Update() function
 		})
 
 		if err != nil {
