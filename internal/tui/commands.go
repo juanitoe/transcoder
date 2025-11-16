@@ -42,7 +42,7 @@ func listenForProgress(wp *transcode.WorkerPool) tea.Cmd {
 }
 
 // scanLibrary returns a command that scans the remote library
-func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
+func scanLibrary(s *scanner.Scanner, db *database.DB, program *tea.Program) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -52,21 +52,17 @@ func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
 		}
 		defer s.Close()
 
-		// Scan library
+		// Scan library with progress updates sent to the TUI
 		err := s.Scan(ctx, func(progress scanner.ScanProgress) {
-			// Send progress updates to the TUI
-			// Note: These progress updates are sent from the scanner goroutine
-			// but we can't send tea.Msg from here directly. The scanner will
-			// update its internal state which we poll via tickMsg
+			// Send progress updates to the TUI via the program
+			if program != nil {
+				program.Send(scanProgressMsg(progress))
+			}
 		})
 
 		if err != nil {
 			return errorMsg("Scan failed: " + err.Error())
 		}
-
-		// Create jobs for files that should be transcoded
-		// This would typically be done during the scan or in a separate step
-		// For now, we just complete the scan
 
 		return scanCompleteMsg{}
 	}

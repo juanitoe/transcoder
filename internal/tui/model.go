@@ -33,6 +33,7 @@ type Model struct {
 	db           *database.DB
 	scanner      *scanner.Scanner
 	workerPool   *transcode.WorkerPool
+	program      *tea.Program
 
 	// State
 	viewMode     ViewMode
@@ -80,6 +81,11 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 	}
 	m.addLog("INFO", "Transcoder TUI started")
 	return m
+}
+
+// SetProgram sets the tea.Program reference for sending messages
+func (m *Model) SetProgram(p *tea.Program) {
+	m.program = p
 }
 
 // Init initializes the model
@@ -232,7 +238,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Starting scan..."
 			m.errorMsg = "" // Clear any previous errors
 			m.addLog("INFO", "Starting library scan")
-			return m, scanLibrary(m.scanner, m.db)
+			return m, scanLibrary(m.scanner, m.db, m.program)
 		}
 		return m, nil
 
