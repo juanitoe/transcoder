@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -49,12 +50,14 @@ type Model struct {
 	scanProgress scanner.ScanProgress
 
 	// UI State
-	selectedJob  int
-	statusMsg    string
-	errorMsg     string
+	selectedJob    int
+	selectedSetting int
+	statusMsg      string
+	errorMsg       string
 
 	// Keyboard hints
-	showHelp     bool
+	showHelp       bool
+	configModified bool
 }
 
 // New creates a new TUI model
@@ -268,16 +271,70 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleSettingsKeys handles keys in settings view
 func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "+", "=":
-		// Increase workers
-		m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers + 1)
-		m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
+	case "up", "k":
+		if m.selectedSetting > 0 {
+			m.selectedSetting--
+		}
 
-	case "-", "_":
-		// Decrease workers
-		if m.cfg.Workers.MaxWorkers > 1 {
-			m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers - 1)
+	case "down", "j":
+		if m.selectedSetting < 2 { // 3 editable settings (0-2)
+			m.selectedSetting++
+		}
+
+	case "left", "h", "-":
+		m.configModified = true
+		switch m.selectedSetting {
+		case 0: // Max Workers
+			if m.cfg.Workers.MaxWorkers > 1 {
+				m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers - 1)
+				m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
+			}
+		case 1: // Quality
+			if m.cfg.Encoder.Quality > 10 {
+				m.cfg.Encoder.Quality -= 5
+				m.statusMsg = fmt.Sprintf("Quality: %d", m.cfg.Encoder.Quality)
+			}
+		case 2: // Preset cycle
+			presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+			for i, p := range presets {
+				if m.cfg.Encoder.Preset == p && i > 0 {
+					m.cfg.Encoder.Preset = presets[i-1]
+					m.statusMsg = fmt.Sprintf("Preset: %s", m.cfg.Encoder.Preset)
+					break
+				}
+			}
+		}
+
+	case "right", "l", "+", "=":
+		m.configModified = true
+		switch m.selectedSetting {
+		case 0: // Max Workers
+			m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers + 1)
 			m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
+		case 1: // Quality
+			if m.cfg.Encoder.Quality < 100 {
+				m.cfg.Encoder.Quality += 5
+				m.statusMsg = fmt.Sprintf("Quality: %d", m.cfg.Encoder.Quality)
+			}
+		case 2: // Preset cycle
+			presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+			for i, p := range presets {
+				if m.cfg.Encoder.Preset == p && i < len(presets)-1 {
+					m.cfg.Encoder.Preset = presets[i+1]
+					m.statusMsg = fmt.Sprintf("Preset: %s", m.cfg.Encoder.Preset)
+					break
+				}
+			}
+		}
+
+	case "w":
+		// Save config
+		configPath := os.ExpandEnv("$HOME/transcoder/config.yaml")
+		if err := m.cfg.Save(configPath); err != nil {
+			m.errorMsg = fmt.Sprintf("Failed to save config: %v", err)
+		} else {
+			m.statusMsg = "Configuration saved!"
+			m.configModified = false
 		}
 	}
 

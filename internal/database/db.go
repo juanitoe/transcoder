@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite" // Pure Go SQLite driver
+	_ "github.com/mattn/go-sqlite3" // CGO SQLite driver (more stable)
 
 	"transcoder/internal/types"
 )
@@ -18,20 +18,20 @@ type DB struct {
 
 // New creates a new database connection and initializes the schema
 func New(dbPath string) (*DB, error) {
-	conn, err := sql.Open("sqlite", dbPath)
+	conn, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Enable WAL mode for better concurrency
+	// Try to enable WAL mode for better concurrency
+	// If it fails, continue with default journal mode (DELETE)
 	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+		// WAL mode failed, try DELETE mode
+		conn.Exec("PRAGMA journal_mode=DELETE")
 	}
 
 	// Set synchronous mode to NORMAL for better performance
-	if _, err := conn.Exec("PRAGMA synchronous=NORMAL"); err != nil {
-		return nil, fmt.Errorf("failed to set synchronous mode: %w", err)
-	}
+	conn.Exec("PRAGMA synchronous=NORMAL")
 
 	// Create schema
 	if _, err := conn.Exec(schemaSQL); err != nil {
