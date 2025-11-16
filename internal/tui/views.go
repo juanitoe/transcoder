@@ -205,20 +205,20 @@ func (m Model) renderJobs() string {
 			// Show file size info for transcoding jobs
 			sizeInfo := ""
 			if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
-				sizeInfo = fmt.Sprintf(" • %s / %s",
+				sizeInfo = fmt.Sprintf("  (%s / %s)",
 					formatBytes(job.TranscodedFileSizeBytes),
 					formatBytes(job.FileSizeBytes))
 			}
 
 			activeContent += style.Render(fmt.Sprintf(
 				"%sJob #%d  %s\n"+
-				"      %s%s  •  %s\n\n",
+				"      %s  •  %s%s\n\n",
 				prefix,
 				job.ID,
 				truncateString(job.FileName, 60),
 				statusColor.Render(string(job.Status)),
-				sizeInfo,
 				formatProgress(job.Progress),
+				sizeInfo,
 			))
 		}
 
