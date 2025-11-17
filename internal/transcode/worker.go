@@ -246,6 +246,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Stage 1: Download (skip if file already exists - recovered job)
 	if _, err := os.Stat(localInputPath); os.IsNotExist(err) {
+		w.db.UpdateJobStatus(job.ID, types.StatusDownloading, types.StageDownload, 0)
 		w.updateProgress(job.ID, types.StageDownload, 0, "Downloading")
 		err = jobScanner.DownloadFile(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
 			progress := (float64(bytesRead) / float64(totalBytes)) * 100
@@ -269,6 +270,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	}
 
 	// Stage 2: Transcode
+	w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
 	w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding")
 
 	// Start a goroutine to periodically update file size
@@ -341,6 +343,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	}
 
 	// Stage 4: Upload
+	w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
 	w.updateProgress(job.ID, types.StageUpload, 0, "Uploading")
 
 	// Upload to temporary location first
