@@ -249,7 +249,7 @@ func (m Model) renderJobs() string {
 	}
 
 	// Create styled panel with width constraint
-	activePanelStyle := boxStyle.Copy().Width(panelWidth)
+	activePanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth)
 	activePanel := activePanelStyle.Render(activeContent)
 
 	// Queued Jobs Panel
@@ -303,7 +303,7 @@ func (m Model) renderJobs() string {
 	}
 
 	// Create styled panel with width constraint
-	queuedPanelStyle := boxStyle.Copy().Width(panelWidth)
+	queuedPanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth)
 	queuedPanel := queuedPanelStyle.Render(queuedContent)
 
 	// Layout panels side by side
