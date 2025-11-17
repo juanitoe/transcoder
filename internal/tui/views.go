@@ -445,14 +445,24 @@ func (m Model) renderHelp() string {
 func (m Model) renderLogs() string {
 	title := "📝 Application Logs\n\n"
 
+	// Ensure we have valid dimensions
+	width := m.width
+	if width <= 0 {
+		width = 80 // Fallback default
+	}
+	height := m.height
+	if height <= 0 {
+		height = 24 // Fallback default
+	}
+
 	if len(m.logs) == 0 {
 		content := title + statusStyle.Render("No logs yet")
-		return boxStyle.Width(m.width - 4).Render(content)
+		return boxStyle.Width(width - 4).Render(content)
 	}
 
 	// Calculate how many logs we can display based on available height
 	// Account for: header (3), footer (3), title (2), box padding/borders (6), scroll indicator (2)
-	availableHeight := m.height - 16
+	availableHeight := height - 16
 	if availableHeight < 5 {
 		availableHeight = 5 // Fallback minimum
 	}
@@ -478,11 +488,15 @@ func (m Model) renderLogs() string {
 
 	// Build log content
 	var logLines []string
+	maxLogWidth := width - 12 // Account for box borders and padding
+	if maxLogWidth < 20 {
+		maxLogWidth = 20 // Minimum width
+	}
+
 	for i := endIdx - 1; i >= startIdx; i-- {
 		logEntry := m.logs[totalLogs-1-i]
 
 		// Truncate long log lines to fit width
-		maxLogWidth := m.width - 12 // Account for box borders and padding
 		if len(logEntry) > maxLogWidth {
 			logEntry = logEntry[:maxLogWidth-3] + "..."
 		}
@@ -516,8 +530,8 @@ func (m Model) renderLogs() string {
 	}
 
 	return boxStyle.
-		Width(m.width - 4).
-		MaxHeight(m.height - 8).
+		Width(width - 4).
+		MaxHeight(height - 8).
 		Render(content)
 }
 
