@@ -168,11 +168,15 @@ func (m Model) renderDashboard() string {
 func (m Model) renderJobs() string {
 	visibleHeight := m.calculateVisibleJobsHeight()
 
-	// Calculate panel widths based on terminal width
-	// Use fallback if width not set yet
+	// Calculate panel dimensions based on terminal size
+	// Use fallback if dimensions not set yet
 	termWidth := m.width
+	termHeight := m.height
 	if termWidth <= 0 {
 		termWidth = 120 // Fallback default
+	}
+	if termHeight <= 0 {
+		termHeight = 40 // Fallback default
 	}
 
 	// Each panel gets half the width minus borders and padding
@@ -180,6 +184,13 @@ func (m Model) renderJobs() string {
 	panelWidth := (termWidth / 2) - 8
 	if panelWidth < 40 {
 		panelWidth = 40 // Minimum width
+	}
+
+	// Calculate max panel height: terminal height - header - footer - help text - margins
+	// Header (~3 lines), Footer (~2 lines), Help text (~2 lines), margins (~3 lines)
+	panelHeight := termHeight - 10
+	if panelHeight < 15 {
+		panelHeight = 15 // Minimum height
 	}
 
 	// Adjust filename truncation based on panel width
@@ -248,8 +259,8 @@ func (m Model) renderJobs() string {
 		}
 	}
 
-	// Create styled panel with width constraint
-	activePanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth)
+	// Create styled panel with width and height constraints
+	activePanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth).Height(panelHeight).MaxHeight(panelHeight)
 	activePanel := activePanelStyle.Render(activeContent)
 
 	// Queued Jobs Panel
@@ -302,8 +313,8 @@ func (m Model) renderJobs() string {
 		}
 	}
 
-	// Create styled panel with width constraint
-	queuedPanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth)
+	// Create styled panel with width and height constraints
+	queuedPanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth).Height(panelHeight).MaxHeight(panelHeight)
 	queuedPanel := queuedPanelStyle.Render(queuedContent)
 
 	// Layout panels side by side
