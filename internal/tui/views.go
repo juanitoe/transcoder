@@ -168,6 +168,26 @@ func (m Model) renderDashboard() string {
 func (m Model) renderJobs() string {
 	visibleHeight := m.calculateVisibleJobsHeight()
 
+	// Calculate panel widths based on terminal width
+	// Use fallback if width not set yet
+	termWidth := m.width
+	if termWidth <= 0 {
+		termWidth = 120 // Fallback default
+	}
+
+	// Each panel gets half the width minus borders and padding
+	// Border (2), Padding (4), Margin between panels (2)
+	panelWidth := (termWidth / 2) - 8
+	if panelWidth < 40 {
+		panelWidth = 40 // Minimum width
+	}
+
+	// Adjust filename truncation based on panel width
+	fileNameWidth := panelWidth - 20 // Reserve space for prefix, job ID, etc.
+	if fileNameWidth < 20 {
+		fileNameWidth = 20
+	}
+
 	// Active Jobs Panel
 	activeTitle := "🎬 Active Jobs"
 	if m.jobsPanel == 0 {
@@ -215,7 +235,7 @@ func (m Model) renderJobs() string {
 				"      %s  •  %s%s\n\n",
 				prefix,
 				job.ID,
-				truncateString(job.FileName, 60),
+				truncateString(job.FileName, fileNameWidth),
 				statusColor.Render(string(job.Status)),
 				formatProgress(job.Progress),
 				sizeInfo,
@@ -227,7 +247,10 @@ func (m Model) renderJobs() string {
 			activeContent += fmt.Sprintf("\n%s", helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.activeJobs))))
 		}
 	}
-	activePanel := boxStyle.Render(activeContent)
+
+	// Create styled panel with width constraint
+	activePanelStyle := boxStyle.Copy().Width(panelWidth)
+	activePanel := activePanelStyle.Render(activeContent)
 
 	// Queued Jobs Panel
 	queuedTitle := "📋 Queued Jobs"
@@ -267,7 +290,7 @@ func (m Model) renderJobs() string {
 				"      %s  •  Pri: %d\n\n",
 				prefix,
 				job.ID,
-				truncateString(job.FileName, 60),
+				truncateString(job.FileName, fileNameWidth),
 				formatBytes(job.FileSizeBytes),
 				job.Priority,
 			))
@@ -278,7 +301,10 @@ func (m Model) renderJobs() string {
 			queuedContent += fmt.Sprintf("\n%s", helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.queuedJobs))))
 		}
 	}
-	queuedPanel := boxStyle.Render(queuedContent)
+
+	// Create styled panel with width constraint
+	queuedPanelStyle := boxStyle.Copy().Width(panelWidth)
+	queuedPanel := queuedPanelStyle.Render(queuedContent)
 
 	// Layout panels side by side
 	layout := lipgloss.JoinHorizontal(lipgloss.Top, activePanel, queuedPanel)
