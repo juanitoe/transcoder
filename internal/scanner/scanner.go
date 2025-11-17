@@ -462,6 +462,22 @@ func (s *Scanner) DeleteRemoteFile(remotePath string) error {
 	return nil
 }
 
+// RenameRemoteFile renames/moves a file on the remote server (atomic operation)
+func (s *Scanner) RenameRemoteFile(oldPath, newPath string) error {
+	if s.sftpClient == nil {
+		return fmt.Errorf("not connected - call Connect() first")
+	}
+
+	s.logDebug("Renaming remote file: %s -> %s", oldPath, newPath)
+
+	if err := s.sftpClient.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("failed to rename remote file: %w", err)
+	}
+
+	s.logDebug("Successfully renamed file")
+	return nil
+}
+
 // GetProgress returns the current scan progress
 func (s *Scanner) GetProgress() ScanProgress {
 	return s.progress

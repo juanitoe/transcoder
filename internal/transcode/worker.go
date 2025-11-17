@@ -367,7 +367,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	default:
 	}
 
-	// Replace original file with transcoded file
+	// Replace original file with transcoded file atomically
 	// First delete the original
 	if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
@@ -375,10 +375,12 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		return
 	}
 
-	// Rename transcoded file to original name
-	// SFTP doesn't have a rename operation, so we'll handle this differently
-	// For now, we assume the temp file is the final file
-	// In production, you might want to use SSH to execute a mv command
+	// Rename transcoded file to original name (atomic operation)
+	if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
+		w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
+		jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+		return
+	}
 
 	// Calculate encoding time and stats
 	encodingTime := int(time.Since(startTime).Seconds())
