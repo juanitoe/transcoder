@@ -275,7 +275,15 @@ func (db *DB) UpdateJobFileSize(jobID int64, fileSize int64) error {
 
 // CompleteJob marks a job as completed
 func (db *DB) CompleteJob(jobID int64, outputSize int64, encodingTime int, fps float64) error {
-	_, err := db.conn.Exec(`
+	// Start a transaction to update both tables atomically
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Update the job status
+	_, err = tx.Exec(`
 		UPDATE transcode_jobs
 		SET status = 'completed',
 		    progress = 100.0,
@@ -287,8 +295,22 @@ func (db *DB) CompleteJob(jobID int64, outputSize int64, encodingTime int, fps f
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, outputSize, encodingTime, fps, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update job: %w", err)
+	}
 
-	return err
+	// Mark the media file as no longer needing transcoding
+	_, err = tx.Exec(`
+		UPDATE media_files
+		SET should_transcode = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+	`, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update media file: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // FailJob marks a job as failed
