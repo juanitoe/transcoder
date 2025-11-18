@@ -241,6 +241,15 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		return
 	}
 
+	// Track job completion status for cleanup
+	jobCompleted := false
+	defer func() {
+		// Clean up work directory if job failed or was canceled
+		if !jobCompleted {
+			os.RemoveAll(workDir)
+		}
+	}()
+
 	localInputPath := filepath.Join(workDir, job.FileName)
 	localOutputPath := filepath.Join(workDir, "transcoded_"+job.FileName)
 
@@ -390,7 +399,10 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	w.db.CompleteJob(job.ID, transcodedInfo.Size, encodingTime, fps)
 	w.updateProgress(job.ID, types.StageUpload, 100, "Completed")
 
-	// Clean up work directory only after successful completion
+	// Mark job as completed so cleanup doesn't delete work directory
+	jobCompleted = true
+
+	// Clean up work directory after successful completion
 	os.RemoveAll(workDir)
 }
 

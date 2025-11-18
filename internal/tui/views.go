@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"transcoder/internal/types"
+	"transcoder/internal/version"
 )
 
 // renderHeader renders the top header bar
@@ -59,14 +60,17 @@ func (m Model) renderFooter() string {
 	// Help hints
 	helpText := helpStyle.Render("Press [h] for help  •  [q] quit  •  [r] refresh")
 
-	// Last update time
+	// Version and last update time
+	versionText := statusStyle.Render(fmt.Sprintf("v%s", version.GetVersion()))
 	updateText := statusStyle.Render(fmt.Sprintf("Updated: %s", m.lastUpdate.Format("15:04:05")))
 
 	footer := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		statusText,
-		strings.Repeat(" ", max(0, m.width-lipgloss.Width(statusText)-lipgloss.Width(helpText)-lipgloss.Width(updateText)-4)),
+		strings.Repeat(" ", max(0, m.width-lipgloss.Width(statusText)-lipgloss.Width(helpText)-lipgloss.Width(versionText)-lipgloss.Width(updateText)-6)),
 		helpText,
+		"  ",
+		versionText,
 		"  ",
 		updateText,
 	)
