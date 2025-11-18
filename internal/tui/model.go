@@ -652,7 +652,12 @@ func formatDuration(seconds int) string {
 	return fmt.Sprintf("%ds", s)
 }
 
-func formatProgress(progress float64) string {
+func formatProgress(progress float64, stage types.ProcessingStage) string {
+	// During transcoding, show N/A since we don't have accurate progress
+	if stage == types.StageTranscode {
+		bar := strings.Repeat("░", 20)
+		return fmt.Sprintf("[%s] N/A", bar)
+	}
 	bar := progressBar(progress, 20)
 	return fmt.Sprintf("[%s] %.1f%%", bar, progress)
 }

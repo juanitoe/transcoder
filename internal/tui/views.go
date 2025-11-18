@@ -145,7 +145,7 @@ func (m Model) renderDashboard() string {
 				statusColor.Render(string(job.Status)),
 				job.WorkerID,
 				sizeInfo,
-				formatProgress(job.Progress),
+				formatProgress(job.Progress, job.Stage),
 			)
 		}
 	}
@@ -252,7 +252,7 @@ func (m Model) renderJobs() string {
 				job.ID,
 				truncateString(job.FileName, fileNameWidth),
 				statusColor.Render(string(job.Status)),
-				formatProgress(job.Progress),
+				formatProgress(job.Progress, job.Stage),
 				sizeInfo,
 			))
 		}
