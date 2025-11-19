@@ -208,186 +208,175 @@ func (m Model) renderDashboard() string {
 }
 
 // renderJobs renders the jobs view with two panels: active and queued
+// renderJobs renders the jobs view with clickable panel tabs
 func (m Model) renderJobs() string {
 	visibleHeight := m.calculateVisibleJobsHeight()
+	boxWidth := m.width - 4 // Full width minus margins
 
-	// Calculate panel dimensions based on terminal size
-	// Use fallback if dimensions not set yet
-	termWidth := m.width
-	termHeight := m.height
-	if termWidth <= 0 {
-		termWidth = 120 // Fallback default
-	}
-	if termHeight <= 0 {
-		termHeight = 40 // Fallback default
-	}
+	// Create clickable tab-style panel switcher
+	activeTabStyle := headerStyle
+	queuedTabStyle := statusStyle
 
-	// Each panel gets half the width minus borders and padding
-	panelWidth := (termWidth / 2) - boxPadding
-	if panelWidth < 40 {
-		panelWidth = 40 // Minimum width
+	if m.jobsPanel == 1 {
+		activeTabStyle = statusStyle
+		queuedTabStyle = headerStyle
 	}
 
-	// Calculate max panel height: terminal height - header - footer - help text - margins
-	// Header (~3 lines), Footer (~2 lines), Help text (~2 lines), margins (~3 lines)
-	panelHeight := termHeight - 10
-	if panelHeight < 15 {
-		panelHeight = 15 // Minimum height
+	panelSwitcher := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		activeTabStyle.Render(" 🎬 Active Jobs "),
+		"  ",
+		queuedTabStyle.Render(" 📋 Queued Jobs "),
+	)
+
+	// Adjust filename truncation based on box width
+	fileNameWidth := boxWidth - 25 // Reserve space for prefix, job ID, etc.
+	if fileNameWidth < 30 {
+		fileNameWidth = 30
 	}
 
-	// Adjust filename truncation based on panel width
-	fileNameWidth := panelWidth - 20 // Reserve space for prefix, job ID, etc.
-	if fileNameWidth < 20 {
-		fileNameWidth = 20
-	}
+	var panelContent string
 
-	// Active Jobs Panel
-	activeTitle := "🎬 Active Jobs"
+	// Enhanced selected job style with background
+	enhancedSelectedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("230")).
+		Background(lipgloss.Color("62")).
+		Bold(true).
+		Padding(0, 1)
+
+	// Render the active panel
 	if m.jobsPanel == 0 {
-		activeTitle = headerStyle.Render("🎬 Active Jobs [SELECTED]")
-	}
+		// Active Jobs Panel
+		if len(m.activeJobs) == 0 {
+			panelContent = statusStyle.Render("No active jobs")
+		} else {
+			panelContent = fmt.Sprintf("Total: %d\n\n", len(m.activeJobs))
 
-	activeContent := activeTitle + "\n\n"
-	if len(m.activeJobs) == 0 {
-		activeContent += statusStyle.Render("No active jobs")
-	} else {
-		activeContent += fmt.Sprintf("Total: %d\n\n", len(m.activeJobs))
-
-		// Calculate visible window
-		startIdx := m.activeJobsScrollOffset
-		endIdx := startIdx + visibleHeight
-		if endIdx > len(m.activeJobs) {
-			endIdx = len(m.activeJobs)
-		}
-		if startIdx >= len(m.activeJobs) {
-			startIdx = max(0, len(m.activeJobs)-visibleHeight)
-		}
-
-		// Render visible jobs
-		for i := startIdx; i < endIdx; i++ {
-			job := m.activeJobs[i]
-			style := lipgloss.NewStyle()
-			prefix := "  "
-			if m.jobsPanel == 0 && i == m.selectedJob {
-				style = selectedStyle
-				prefix = "► "
+			// Calculate visible window
+			startIdx := m.activeJobsScrollOffset
+			endIdx := startIdx + visibleHeight
+			if endIdx > len(m.activeJobs) {
+				endIdx = len(m.activeJobs)
+			}
+			if startIdx >= len(m.activeJobs) {
+				startIdx = max(0, len(m.activeJobs)-visibleHeight)
 			}
 
-			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
+			// Render visible jobs
+			for i := startIdx; i < endIdx; i++ {
+				job := m.activeJobs[i]
+				prefix := "  "
+				isSelected := (m.jobsPanel == 0 && i == m.selectedJob)
 
-			// Show file size info based on job status
-			sizeInfo := ""
-			if job.Status == types.StatusDownloading || job.Status == types.StatusUploading {
-				// Show bytes transferred for download/upload with bandwidth
-				if history, ok := m.progressData[job.ID]; ok {
-					if progress := history.Latest(); progress != nil && progress.TotalBytes > 0 {
-						bandwidth := history.CalculateBandwidth()
-						if bandwidth > 0 {
-							sizeInfo = fmt.Sprintf("  (%s / %s • %s/s)",
-								formatBytes(progress.BytesTransferred),
-								formatBytes(progress.TotalBytes),
-								formatBytes(int64(bandwidth)))
-						} else {
-							sizeInfo = fmt.Sprintf("  (%s / %s)",
-								formatBytes(progress.BytesTransferred),
-								formatBytes(progress.TotalBytes))
+				statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
+
+				// Show file size info based on job status
+				sizeInfo := ""
+				if job.Status == types.StatusDownloading || job.Status == types.StatusUploading {
+					// Show bytes transferred for download/upload with bandwidth
+					if history, ok := m.progressData[job.ID]; ok {
+						if progress := history.Latest(); progress != nil && progress.TotalBytes > 0 {
+							bandwidth := history.CalculateBandwidth()
+							if bandwidth > 0 {
+								sizeInfo = fmt.Sprintf("  (%s / %s • %s/s)",
+									formatBytes(progress.BytesTransferred),
+									formatBytes(progress.TotalBytes),
+									formatBytes(int64(bandwidth)))
+							} else {
+								sizeInfo = fmt.Sprintf("  (%s / %s)",
+									formatBytes(progress.BytesTransferred),
+									formatBytes(progress.TotalBytes))
+							}
 						}
 					}
+				} else if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
+					sizeInfo = fmt.Sprintf("  (%s / %s)",
+						formatBytes(job.TranscodedFileSizeBytes),
+						formatBytes(job.FileSizeBytes))
 				}
-			} else if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
-				sizeInfo = fmt.Sprintf("  (%s / %s)",
-					formatBytes(job.TranscodedFileSizeBytes),
-					formatBytes(job.FileSizeBytes))
+
+				jobText := fmt.Sprintf(
+					"%sJob #%d  %s\n"+
+						"      %s | %s%s\n"+
+						"      %s\n",
+					prefix,
+					job.ID,
+					truncateString(job.FileName, fileNameWidth),
+					statusColor.Render(string(job.Status)),
+					job.WorkerID,
+					sizeInfo,
+					formatProgress(job.Progress, job.Stage),
+				)
+
+				if isSelected {
+					panelContent += enhancedSelectedStyle.Render("► "+jobText) + "\n"
+				} else {
+					panelContent += jobText + "\n"
+				}
 			}
 
-			activeContent += style.Render(fmt.Sprintf(
-				"%sJob #%d  %s\n"+
-				"      %s | %s%s\n"+
-				"      %s\n\n",
-				prefix,
-				job.ID,
-				truncateString(job.FileName, fileNameWidth),
-				statusColor.Render(string(job.Status)),
-				job.WorkerID,
-				sizeInfo,
-				formatProgress(job.Progress, job.Stage),
-			))
+			// Add scroll indicator if needed
+			if len(m.activeJobs) > visibleHeight {
+				panelContent += "\n" + helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.activeJobs)))
+			}
 		}
-
-		// Add scroll indicator if needed
-		if len(m.activeJobs) > visibleHeight {
-			activeContent += fmt.Sprintf("\n%s", helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.activeJobs))))
-		}
-	}
-
-	// Create styled panel with width and height constraints
-	activePanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth).Height(panelHeight).MaxHeight(panelHeight)
-	activePanel := activePanelStyle.Render(activeContent)
-
-	// Queued Jobs Panel
-	queuedTitle := "📋 Queued Jobs"
-	if m.jobsPanel == 1 {
-		queuedTitle = headerStyle.Render("📋 Queued Jobs [SELECTED]")
-	}
-
-	queuedContent := queuedTitle + "\n\n"
-	if len(m.queuedJobs) == 0 {
-		queuedContent += statusStyle.Render("No queued jobs\n\n")
-		queuedContent += "Press [a] to queue jobs"
 	} else {
-		queuedContent += fmt.Sprintf("Total: %d\n\n", len(m.queuedJobs))
+		// Queued Jobs Panel
+		if len(m.queuedJobs) == 0 {
+			panelContent = statusStyle.Render("No queued jobs\n\n")
+			panelContent += "Press [a] to queue jobs"
+		} else {
+			panelContent = fmt.Sprintf("Total: %d\n\n", len(m.queuedJobs))
 
-		// Calculate visible window
-		startIdx := m.queuedJobsScrollOffset
-		endIdx := startIdx + visibleHeight
-		if endIdx > len(m.queuedJobs) {
-			endIdx = len(m.queuedJobs)
-		}
-		if startIdx >= len(m.queuedJobs) {
-			startIdx = max(0, len(m.queuedJobs)-visibleHeight)
-		}
-
-		// Render visible jobs
-		for i := startIdx; i < endIdx; i++ {
-			job := m.queuedJobs[i]
-			style := lipgloss.NewStyle()
-			prefix := "  "
-			if m.jobsPanel == 1 && i == m.selectedJob {
-				style = selectedStyle
-				prefix = "► "
+			// Calculate visible window
+			startIdx := m.queuedJobsScrollOffset
+			endIdx := startIdx + visibleHeight
+			if endIdx > len(m.queuedJobs) {
+				endIdx = len(m.queuedJobs)
+			}
+			if startIdx >= len(m.queuedJobs) {
+				startIdx = max(0, len(m.queuedJobs)-visibleHeight)
 			}
 
-			queuedContent += style.Render(fmt.Sprintf(
-				"%s[%d] %s\n"+
-				"      %s  •  Pri: %d\n\n",
-				prefix,
-				job.ID,
-				truncateString(job.FileName, fileNameWidth),
-				formatBytes(job.FileSizeBytes),
-				job.Priority,
-			))
-		}
+			// Render visible jobs
+			for i := startIdx; i < endIdx; i++ {
+				job := m.queuedJobs[i]
+				prefix := "  "
+				isSelected := (m.jobsPanel == 1 && i == m.selectedJob)
 
-		// Add scroll indicator if needed
-		if len(m.queuedJobs) > visibleHeight {
-			queuedContent += fmt.Sprintf("\n%s", helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.queuedJobs))))
+				jobText := fmt.Sprintf(
+					"%s[%d] %s\n"+
+						"      %s  •  Pri: %d\n",
+					prefix,
+					job.ID,
+					truncateString(job.FileName, fileNameWidth),
+					formatBytes(job.FileSizeBytes),
+					job.Priority,
+				)
+
+				if isSelected {
+					panelContent += enhancedSelectedStyle.Render("► "+jobText) + "\n"
+				} else {
+					panelContent += jobText + "\n"
+				}
+			}
+
+			// Add scroll indicator if needed
+			if len(m.queuedJobs) > visibleHeight {
+				panelContent += "\n" + helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.queuedJobs)))
+			}
 		}
 	}
 
-	// Create styled panel with width and height constraints
-	queuedPanelStyle := boxStyle.Copy().Width(panelWidth).MaxWidth(panelWidth).Height(panelHeight).MaxHeight(panelHeight)
-	queuedPanel := queuedPanelStyle.Render(queuedContent)
-
-	// Layout panels side by side
-	layout := lipgloss.JoinHorizontal(lipgloss.Top, activePanel, queuedPanel)
+	// Create full-width box
+	jobsBox := boxStyle.Copy().Width(boxWidth).Render(panelSwitcher + "\n\n" + panelContent)
 
 	// Add help text
 	helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [d] delete  •  [K] kill  •  [p] pause  •  [c] cancel  •  [enter] resume")
 
-	return layout + helpText
+	return jobsBox + helpText
 }
 
-// renderHistory renders the job history view
 func (m Model) renderHistory() string {
 	content := "📜 Job History\n\n"
 

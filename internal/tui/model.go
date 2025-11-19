@@ -465,6 +465,36 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Handle clicks on Jobs view panel switcher
+	// Panel switcher is at row 3 (header=0, status=1, empty=2, box_border=3, panel_tabs=4)
+	if m.viewMode == ViewJobs && msg.Y == 4 {
+		// Panel tabs: " 🎬 Active Jobs " + "  " + " 📋 Queued Jobs "
+		// Starting X is at border (around x=3 due to box padding)
+		activeTabText := " 🎬 Active Jobs "
+		queuedTabText := " 📋 Queued Jobs "
+
+		// Account for box border and padding (typically starts at x ~= 3)
+		panelTabsStartX := 3
+
+		activeTabEnd := panelTabsStartX + len(activeTabText)
+		queuedTabStart := activeTabEnd + 2 // 2 spaces between tabs
+		queuedTabEnd := queuedTabStart + len(queuedTabText)
+
+		if msg.X >= panelTabsStartX && msg.X < activeTabEnd {
+			// Active Jobs tab clicked
+			m.jobsPanel = 0
+			m.selectedJob = 0
+			m.activeJobsScrollOffset = 0
+			return m, nil
+		} else if msg.X >= queuedTabStart && msg.X < queuedTabEnd {
+			// Queued Jobs tab clicked
+			m.jobsPanel = 1
+			m.selectedJob = 0
+			m.queuedJobsScrollOffset = 0
+			return m, nil
+		}
+	}
+
 	return m, nil
 }
 
