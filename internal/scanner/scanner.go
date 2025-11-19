@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -10,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"transcoder/internal/checksum"
 	"transcoder/internal/config"
 	"transcoder/internal/database"
 	"transcoder/internal/types"
+	"github.com/cespare/xxhash/v2"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -20,12 +23,13 @@ import (
 
 // Scanner handles remote media library scanning
 type Scanner struct {
-	cfg        *config.Config
-	db         *database.DB
-	sshClient  *ssh.Client
-	sftpClient *sftp.Client
-	progress   ScanProgress
-	logFile    *os.File
+	cfg           *config.Config
+	db            *database.DB
+	sshClient     *ssh.Client
+	sftpClient    *sftp.Client
+	progress      ScanProgress
+	logFile       *os.File
+	checksumAlgo  checksum.Algorithm // Detected remote checksum algorithm
 }
 
 // New creates a new Scanner instance
@@ -126,7 +130,34 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	s.sftpClient = sftpClient
 	s.logDebug("SFTP client created successfully")
 
+	// Detect available checksum algorithm on remote
+	s.checksumAlgo = s.detectRemoteChecksumAlgo()
+	s.logDebug("Remote checksum algorithm: %s", s.checksumAlgo)
+
 	return nil
+}
+
+// detectRemoteChecksumAlgo checks which checksum tool is available on remote
+func (s *Scanner) detectRemoteChecksumAlgo() checksum.Algorithm {
+	session, err := s.sshClient.NewSession()
+	if err != nil {
+		s.logDebug("Failed to create session for checksum detection: %v", err)
+		return checksum.AlgoMD5 // Default fallback
+	}
+	defer session.Close()
+
+	output, err := session.Output(checksum.DetectRemoteCommand())
+	if err != nil {
+		s.logDebug("Failed to detect checksum tool: %v", err)
+		return checksum.AlgoMD5 // Default fallback
+	}
+
+	return checksum.ParseDetectionOutput(string(output))
+}
+
+// GetChecksumAlgo returns the detected remote checksum algorithm
+func (s *Scanner) GetChecksumAlgo() checksum.Algorithm {
+	return s.checksumAlgo
 }
 
 // Close closes the SSH/SFTP connection
@@ -315,36 +346,45 @@ func (s *Scanner) extractMetadata(ctx context.Context, remotePath string) (*type
 
 // DownloadFile downloads a remote file to a local path with progress tracking
 func (s *Scanner) DownloadFile(ctx context.Context, remotePath, localPath string, progressCb func(bytesRead int64, totalBytes int64)) error {
+	_, err := s.DownloadFileWithChecksum(ctx, remotePath, localPath, progressCb)
+	return err
+}
+
+// DownloadFileWithChecksum downloads a remote file and returns its checksum
+func (s *Scanner) DownloadFileWithChecksum(ctx context.Context, remotePath, localPath string, progressCb func(bytesRead int64, totalBytes int64)) (string, error) {
 	if s.sftpClient == nil {
-		return fmt.Errorf("not connected - call Connect() first")
+		return "", fmt.Errorf("not connected - call Connect() first")
 	}
 
 	// Open remote file
 	remoteFile, err := s.sftpClient.Open(remotePath)
 	if err != nil {
-		return fmt.Errorf("failed to open remote file: %w", err)
+		return "", fmt.Errorf("failed to open remote file: %w", err)
 	}
 	defer remoteFile.Close()
 
 	// Get file size
 	stat, err := remoteFile.Stat()
 	if err != nil {
-		return fmt.Errorf("failed to stat remote file: %w", err)
+		return "", fmt.Errorf("failed to stat remote file: %w", err)
 	}
 	totalBytes := stat.Size()
 
 	// Create local file
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		return fmt.Errorf("failed to create local directory: %w", err)
+		return "", fmt.Errorf("failed to create local directory: %w", err)
 	}
 
 	localFile, err := os.Create(localPath)
 	if err != nil {
-		return fmt.Errorf("failed to create local file: %w", err)
+		return "", fmt.Errorf("failed to create local file: %w", err)
 	}
 	defer localFile.Close()
 
-	// Copy with progress tracking
+	// Create hasher for checksum calculation
+	hasher := xxhash.New()
+
+	// Copy with progress tracking and checksum calculation
 	buf := make([]byte, 32*1024) // 32KB buffer
 	var bytesRead int64
 
@@ -352,15 +392,18 @@ func (s *Scanner) DownloadFile(ctx context.Context, remotePath, localPath string
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		default:
 		}
 
 		n, err := remoteFile.Read(buf)
 		if n > 0 {
+			// Write to local file
 			if _, writeErr := localFile.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("failed to write to local file: %w", writeErr)
+				return "", fmt.Errorf("failed to write to local file: %w", writeErr)
 			}
+			// Write to hasher for checksum calculation
+			hasher.Write(buf[:n])
 			bytesRead += int64(n)
 
 			// Report progress
@@ -373,47 +416,57 @@ func (s *Scanner) DownloadFile(ctx context.Context, remotePath, localPath string
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("failed to read from remote file: %w", err)
+			return "", fmt.Errorf("failed to read from remote file: %w", err)
 		}
 	}
 
-	return nil
+	// Return the checksum
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // UploadFile uploads a local file to a remote path with progress tracking
 func (s *Scanner) UploadFile(ctx context.Context, localPath, remotePath string, progressCb func(bytesWritten int64, totalBytes int64)) error {
+	_, err := s.UploadFileWithChecksum(ctx, localPath, remotePath, progressCb)
+	return err
+}
+
+// UploadFileWithChecksum uploads a local file and returns its checksum
+func (s *Scanner) UploadFileWithChecksum(ctx context.Context, localPath, remotePath string, progressCb func(bytesWritten int64, totalBytes int64)) (string, error) {
 	if s.sftpClient == nil {
-		return fmt.Errorf("not connected - call Connect() first")
+		return "", fmt.Errorf("not connected - call Connect() first")
 	}
 
 	// Open local file
 	localFile, err := os.Open(localPath)
 	if err != nil {
-		return fmt.Errorf("failed to open local file: %w", err)
+		return "", fmt.Errorf("failed to open local file: %w", err)
 	}
 	defer localFile.Close()
 
 	// Get file size
 	stat, err := localFile.Stat()
 	if err != nil {
-		return fmt.Errorf("failed to stat local file: %w", err)
+		return "", fmt.Errorf("failed to stat local file: %w", err)
 	}
 	totalBytes := stat.Size()
 
 	// Create remote directory if needed
 	remoteDir := filepath.Dir(remotePath)
 	if err := s.sftpClient.MkdirAll(remoteDir); err != nil {
-		return fmt.Errorf("failed to create remote directory: %w", err)
+		return "", fmt.Errorf("failed to create remote directory: %w", err)
 	}
 
 	// Create remote file
 	remoteFile, err := s.sftpClient.Create(remotePath)
 	if err != nil {
-		return fmt.Errorf("failed to create remote file: %w", err)
+		return "", fmt.Errorf("failed to create remote file: %w", err)
 	}
 	defer remoteFile.Close()
 
-	// Copy with progress tracking
+	// Create hasher for checksum calculation
+	hasher := xxhash.New()
+
+	// Copy with progress tracking and checksum calculation
 	buf := make([]byte, 32*1024) // 32KB buffer
 	var bytesWritten int64
 
@@ -421,15 +474,18 @@ func (s *Scanner) UploadFile(ctx context.Context, localPath, remotePath string, 
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		default:
 		}
 
 		n, err := localFile.Read(buf)
 		if n > 0 {
+			// Write to remote file
 			if _, writeErr := remoteFile.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("failed to write to remote file: %w", writeErr)
+				return "", fmt.Errorf("failed to write to remote file: %w", writeErr)
 			}
+			// Write to hasher for checksum calculation
+			hasher.Write(buf[:n])
 			bytesWritten += int64(n)
 
 			// Report progress
@@ -442,11 +498,12 @@ func (s *Scanner) UploadFile(ctx context.Context, localPath, remotePath string, 
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("failed to read from local file: %w", err)
+			return "", fmt.Errorf("failed to read from local file: %w", err)
 		}
 	}
 
-	return nil
+	// Return the checksum
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // DeleteRemoteFile deletes a file on the remote server
@@ -476,6 +533,32 @@ func (s *Scanner) RenameRemoteFile(oldPath, newPath string) error {
 
 	s.logDebug("Successfully renamed file")
 	return nil
+}
+
+// CalculateRemoteChecksum calculates the checksum of a remote file via SSH
+func (s *Scanner) CalculateRemoteChecksum(remotePath string) (string, error) {
+	if s.sshClient == nil {
+		return "", fmt.Errorf("not connected - call Connect() first")
+	}
+
+	session, err := s.sshClient.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("failed to create SSH session: %w", err)
+	}
+	defer session.Close()
+
+	// Use detected algorithm
+	cmd := checksum.RemoteCommand(remotePath, s.checksumAlgo)
+	s.logDebug("Calculating remote checksum: %s", cmd)
+
+	output, err := session.Output(cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate remote checksum: %w", err)
+	}
+
+	hash := strings.TrimSpace(string(output))
+	s.logDebug("Remote checksum: %s", hash)
+	return hash, nil
 }
 
 // GetProgress returns the current scan progress

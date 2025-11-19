@@ -60,7 +60,53 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
-	return &DB{conn: conn}, nil
+	db := &DB{conn: conn}
+
+	// Run migrations if needed
+	if err := db.runMigrations(); err != nil {
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	return db, nil
+}
+
+// runMigrations checks schema version and applies necessary migrations
+func (db *DB) runMigrations() error {
+	// Get current schema version
+	var version int
+	row := db.conn.QueryRow("SELECT value FROM system_state WHERE key = 'schema_version'")
+	err := row.Scan(&version)
+	if err != nil {
+		// No version found, assume version 1 (original schema)
+		version = 1
+	}
+
+	// Apply migrations based on current version
+	if version < 2 {
+		// Check if columns already exist (in case of partial migration)
+		var colCount int
+		db.conn.QueryRow(`
+			SELECT COUNT(*) FROM pragma_table_info('media_files')
+			WHERE name = 'source_checksum'
+		`).Scan(&colCount)
+
+		if colCount == 0 {
+			// Run migration v2
+			if _, err := db.conn.Exec(migrationV2SQL); err != nil {
+				return fmt.Errorf("migration v2 failed: %w", err)
+			}
+		}
+
+		// Update schema version
+		if _, err := db.conn.Exec(`
+			INSERT OR REPLACE INTO system_state (key, value, updated_at)
+			VALUES ('schema_version', ?, CURRENT_TIMESTAMP)
+		`, SchemaVersion); err != nil {
+			return fmt.Errorf("failed to update schema version: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // Close closes the database connection
@@ -295,6 +341,50 @@ func (db *DB) CompleteJob(jobID int64, outputSize int64, encodingTime int, fps f
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, outputSize, encodingTime, fps, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update job: %w", err)
+	}
+
+	// Mark the media file as no longer needing transcoding
+	_, err = tx.Exec(`
+		UPDATE media_files
+		SET should_transcode = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+	`, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update media file: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// CompleteJobWithChecksums marks a job as completed with checksum information
+func (db *DB) CompleteJobWithChecksums(jobID int64, outputSize int64, encodingTime int, fps float64, inputChecksum, outputChecksum, uploadedChecksum string) error {
+	// Start a transaction to update both tables atomically
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Update the job status with checksums
+	_, err = tx.Exec(`
+		UPDATE transcode_jobs
+		SET status = 'completed',
+		    progress = 100.0,
+		    transcode_completed_at = CURRENT_TIMESTAMP,
+		    transcoded_file_size_bytes = ?,
+		    encoding_time_seconds = ?,
+		    encoding_fps = ?,
+		    verification_passed = 1,
+		    local_input_checksum = ?,
+		    local_output_checksum = ?,
+		    uploaded_checksum = ?,
+		    checksum_verified = 1,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, outputSize, encodingTime, fps, inputChecksum, outputChecksum, uploadedChecksum, jobID)
 	if err != nil {
 		return fmt.Errorf("failed to update job: %w", err)
 	}

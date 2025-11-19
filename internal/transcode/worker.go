@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"transcoder/internal/checksum"
 	"transcoder/internal/config"
 	"transcoder/internal/database"
 	"transcoder/internal/scanner"
@@ -253,11 +254,14 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	localInputPath := filepath.Join(workDir, job.FileName)
 	localOutputPath := filepath.Join(workDir, "transcoded_"+job.FileName)
 
+	// Track checksums
+	var localInputChecksum string
+
 	// Stage 1: Download (skip if file already exists - recovered job)
 	if _, err := os.Stat(localInputPath); os.IsNotExist(err) {
 		w.db.UpdateJobStatus(job.ID, types.StatusDownloading, types.StageDownload, 0)
 		w.updateProgress(job.ID, types.StageDownload, 0, "Downloading")
-		err = jobScanner.DownloadFile(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
+		localInputChecksum, err = jobScanner.DownloadFileWithChecksum(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
 			progress := (float64(bytesRead) / float64(totalBytes)) * 100
 			w.updateProgress(job.ID, types.StageDownload, progress, fmt.Sprintf("Downloading: %.1f%%", progress))
 		})
@@ -267,8 +271,12 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			return
 		}
 	} else {
-		// File already exists (recovered job), skip download
+		// File already exists (recovered job), calculate checksum
 		w.updateProgress(job.ID, types.StageDownload, 100, "Download skipped (file already exists)")
+		result, err := checksum.CalculateFile(localInputPath)
+		if err == nil {
+			localInputChecksum = result.Hash
+		}
 	}
 
 	// Check if cancelled
@@ -335,6 +343,15 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		w.db.FailJob(job.ID, fmt.Sprintf("Validation failed: %v", err))
 		return
 	}
+
+	// Calculate checksum of transcoded file
+	var localOutputChecksum string
+	result, err := checksum.CalculateFile(localOutputPath)
+	if err != nil {
+		w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
+		return
+	}
+	localOutputChecksum = result.Hash
 	w.updateProgress(job.ID, types.StageValidate, 100, "Validation passed")
 
 	// Check if cancelled
@@ -357,13 +374,20 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Upload to temporary location first
 	remoteTempPath := job.FilePath + ".transcoded"
-	err = jobScanner.UploadFile(jobCtx, localOutputPath, remoteTempPath, func(bytesWritten, totalBytes int64) {
+	uploadedChecksum, err := jobScanner.UploadFileWithChecksum(jobCtx, localOutputPath, remoteTempPath, func(bytesWritten, totalBytes int64) {
 		progress := (float64(bytesWritten) / float64(totalBytes)) * 100
 		w.updateProgress(job.ID, types.StageUpload, progress, fmt.Sprintf("Uploading: %.1f%%", progress))
 	})
 
 	if err != nil {
 		w.db.FailJob(job.ID, fmt.Sprintf("Upload failed: %v", err))
+		return
+	}
+
+	// Verify upload checksum matches local output checksum
+	if uploadedChecksum != localOutputChecksum {
+		w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum))
+		jobScanner.DeleteRemoteFile(remoteTempPath)
 		return
 	}
 
@@ -391,12 +415,22 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		return
 	}
 
+	// Verify final remote file checksum
+	remoteChecksum, err := jobScanner.CalculateRemoteChecksum(job.FilePath)
+	if err != nil {
+		// Log warning but don't fail - the file was uploaded and renamed successfully
+		// Remote checksum verification is optional (may fail if xxhsum/md5sum not installed)
+	} else if remoteChecksum != localOutputChecksum {
+		w.db.FailJob(job.ID, fmt.Sprintf("Final remote checksum mismatch: expected %s, got %s", localOutputChecksum, remoteChecksum))
+		return
+	}
+
 	// Calculate encoding time and stats
 	encodingTime := int(time.Since(startTime).Seconds())
 	fps := 0.0 // We could calculate this from total frames / encoding time
 
-	// Complete the job
-	w.db.CompleteJob(job.ID, transcodedInfo.Size, encodingTime, fps)
+	// Complete the job with checksum information
+	w.db.CompleteJobWithChecksums(job.ID, transcodedInfo.Size, encodingTime, fps, localInputChecksum, localOutputChecksum, uploadedChecksum)
 	w.updateProgress(job.ID, types.StageUpload, 100, "Completed")
 
 	// Mark job as completed so cleanup doesn't delete work directory

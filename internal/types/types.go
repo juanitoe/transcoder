@@ -45,6 +45,9 @@ type MediaFile struct {
 	ShouldTranscode                 bool      `json:"should_transcode"`
 	TranscodingPriority             int       `json:"transcoding_priority"`
 	EstimatedSizeReductionPercent   int       `json:"estimated_size_reduction_percent"`
+	SourceChecksum                  string    `json:"source_checksum"`
+	SourceChecksumAlgo              string    `json:"source_checksum_algo"`
+	SourceChecksumAt                *time.Time `json:"source_checksum_at"`
 	DiscoveredAt                    time.Time `json:"discovered_at"`
 	UpdatedAt                       time.Time `json:"updated_at"`
 }
@@ -66,6 +69,10 @@ type TranscodeJob struct {
 	EncodingTimeSeconds       int             `json:"encoding_time_seconds"`
 	EncodingFPS               float64         `json:"encoding_fps"`
 	VerificationPassed        bool            `json:"verification_passed"`
+	LocalInputChecksum        string          `json:"local_input_checksum"`
+	LocalOutputChecksum       string          `json:"local_output_checksum"`
+	UploadedChecksum          string          `json:"uploaded_checksum"`
+	ChecksumVerified          bool            `json:"checksum_verified"`
 	ErrorMessage              string          `json:"error_message"`
 	RetryCount                int             `json:"retry_count"`
 	LastRetryAt               *time.Time      `json:"last_retry_at"`

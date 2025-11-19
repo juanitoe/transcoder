@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS media_files (
     transcoding_priority INTEGER DEFAULT 0,
     estimated_size_reduction_percent INTEGER,
 
+    -- Checksum for integrity verification
+    source_checksum TEXT,
+    source_checksum_algo TEXT,
+    source_checksum_at TIMESTAMP,
+
     -- Timestamps
     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -53,6 +58,12 @@ CREATE TABLE IF NOT EXISTS transcode_jobs (
 
     -- Verification
     verification_passed BOOLEAN DEFAULT 0,
+
+    -- Checksum verification
+    local_input_checksum TEXT,
+    local_output_checksum TEXT,
+    uploaded_checksum TEXT,
+    checksum_verified BOOLEAN DEFAULT 0,
 
     -- Error handling
     error_message TEXT,
@@ -99,4 +110,21 @@ CREATE INDEX IF NOT EXISTS idx_jobs_priority ON transcode_jobs(priority DESC, cr
 
 CREATE INDEX IF NOT EXISTS idx_log_job ON processing_log(job_id);
 CREATE INDEX IF NOT EXISTS idx_log_type ON processing_log(event_type);
+`
+
+// Schema version for migration tracking
+const SchemaVersion = 2
+
+// Migration SQL for upgrading from version 1 to version 2
+const migrationV2SQL = `
+-- Add checksum columns to media_files
+ALTER TABLE media_files ADD COLUMN source_checksum TEXT;
+ALTER TABLE media_files ADD COLUMN source_checksum_algo TEXT;
+ALTER TABLE media_files ADD COLUMN source_checksum_at TIMESTAMP;
+
+-- Add checksum columns to transcode_jobs
+ALTER TABLE transcode_jobs ADD COLUMN local_input_checksum TEXT;
+ALTER TABLE transcode_jobs ADD COLUMN local_output_checksum TEXT;
+ALTER TABLE transcode_jobs ADD COLUMN uploaded_checksum TEXT;
+ALTER TABLE transcode_jobs ADD COLUMN checksum_verified BOOLEAN DEFAULT 0;
 `
