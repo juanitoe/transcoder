@@ -35,7 +35,7 @@ type ProgressHistory struct {
 // Add adds a new progress update to the history
 func (ph *ProgressHistory) Add(update types.ProgressUpdate) {
 	if ph.Updates == nil {
-		ph.MaxSize = 60 // Keep 60 updates (approximately 30 seconds of history for stable bandwidth)
+		ph.MaxSize = 120 // Keep 120 updates (approximately 60 seconds of history for very stable bandwidth)
 		ph.Updates = make([]types.ProgressUpdate, 0, ph.MaxSize)
 	}
 
