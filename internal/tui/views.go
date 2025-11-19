@@ -445,35 +445,125 @@ func (m Model) renderHistory() string {
 func (m Model) renderSettings() string {
 	content := "⚙️  Settings\n\n"
 
-	content += fmt.Sprintf(
-		"Remote Configuration:\n"+
-			"  Host:           %s:%d\n"+
-			"  User:           %s\n"+
-			"  SSH Key:        %s\n"+
-			"  Media Paths:    %d configured\n\n"+
-			"Encoder Settings:\n"+
-			"  Codec:          %s\n"+
-			"  Quality:        %d/100\n"+
-			"  Preset:         %s\n\n"+
-			"Worker Configuration:\n"+
-			"  Max Workers:    %d  [+/- to adjust]\n"+
-			"  Work Directory: %s\n\n"+
-			"Database:\n"+
-			"  Path:           %s\n",
-		m.cfg.Remote.Host,
-		m.cfg.Remote.Port,
-		m.cfg.Remote.User,
-		m.cfg.Remote.SSHKey,
-		len(m.cfg.Remote.MediaPaths),
-		m.cfg.Encoder.Codec,
-		m.cfg.Encoder.Quality,
-		m.cfg.Encoder.Preset,
-		m.cfg.Workers.MaxWorkers,
-		m.cfg.Workers.WorkDir,
-		m.cfg.Database.Path,
-	)
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	editingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 
-	content += "\n" + helpStyle.Render("Use [+/-] to adjust worker count")
+	settingNames := []string{
+		"Host:          ",
+		"User:          ",
+		"Port:          ",
+		"SSH Key:       ",
+		"Quality:       ",
+		"Preset:        ",
+		"Max Workers:   ",
+		"Work Directory:",
+		"Database Path: ",
+	}
+
+	// Remote Configuration
+	content += "Remote Configuration:\n"
+	for i := 0; i < 4; i++ {
+		prefix := "  "
+		if i == m.selectedSetting {
+			if m.isEditingSettings {
+				prefix = editingStyle.Render("▶ ")
+			} else {
+				prefix = selectedStyle.Render("▶ ")
+			}
+		} else {
+			prefix = "  "
+		}
+
+		label := labelStyle.Render(settingNames[i])
+		value := m.settingsInputs[i].Value()
+		if i == m.selectedSetting && m.isEditingSettings {
+			value = m.settingsInputs[i].View()
+		}
+		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+	}
+
+	// Encoder Settings
+	content += "\nEncoder Settings:\n"
+	content += fmt.Sprintf("  %s %s (fixed)\n", labelStyle.Render("Codec:         "), m.cfg.Encoder.Codec)
+	for i := 4; i < 6; i++ {
+		prefix := "  "
+		if i == m.selectedSetting {
+			if m.isEditingSettings {
+				prefix = editingStyle.Render("▶ ")
+			} else {
+				prefix = selectedStyle.Render("▶ ")
+			}
+		} else {
+			prefix = "  "
+		}
+
+		label := labelStyle.Render(settingNames[i])
+		value := m.settingsInputs[i].Value()
+		if i == m.selectedSetting && m.isEditingSettings {
+			value = m.settingsInputs[i].View()
+		}
+		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+	}
+
+	// Worker Configuration
+	content += "\nWorker Configuration:\n"
+	for i := 6; i < 8; i++ {
+		prefix := "  "
+		if i == m.selectedSetting {
+			if m.isEditingSettings {
+				prefix = editingStyle.Render("▶ ")
+			} else {
+				prefix = selectedStyle.Render("▶ ")
+			}
+		} else {
+			prefix = "  "
+		}
+
+		label := labelStyle.Render(settingNames[i])
+		value := m.settingsInputs[i].Value()
+		if i == m.selectedSetting && m.isEditingSettings {
+			value = m.settingsInputs[i].View()
+		}
+		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+	}
+
+	// Database
+	content += "\nDatabase:\n"
+	i := 8
+	prefix := "  "
+	if i == m.selectedSetting {
+		if m.isEditingSettings {
+			prefix = editingStyle.Render("▶ ")
+		} else {
+			prefix = selectedStyle.Render("▶ ")
+		}
+	} else {
+		prefix = "  "
+	}
+	label := labelStyle.Render(settingNames[i])
+	value := m.settingsInputs[i].Value()
+	if i == m.selectedSetting && m.isEditingSettings {
+		value = m.settingsInputs[i].View()
+	}
+	content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+
+	// Validation error
+	if m.validationError != "" {
+		content += "\n" + errorStyle.Render(fmt.Sprintf("⚠ %s", m.validationError))
+	}
+
+	// Help text
+	content += "\n\n"
+	if m.isEditingSettings {
+		content += helpStyle.Render("[Enter] Save • [Esc] Cancel")
+	} else {
+		content += helpStyle.Render("[↑↓] Navigate • [Enter] Edit • [Ctrl+S] Save to file")
+	}
+
+	if m.configModified {
+		content += "\n" + successStyle.Render("Configuration modified (not saved to file)")
+	}
 
 	return boxStyle.Render(content)
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"transcoder/internal/config"
@@ -117,6 +118,12 @@ type Model struct {
 	showHelp       bool
 	configModified bool
 
+	// Settings editing
+	isEditingSettings bool
+	settingsInputs    []textinput.Model
+	validationError   string
+	configPath        string // Path to save config
+
 	// Logs
 	logs            []string
 	maxLogs         int
@@ -148,9 +155,72 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 		scannerLogPath: scannerLogPath,
 		scannerLogPos:  0,
 		progressData:   make(map[int64]*ProgressHistory),
+		configPath:     os.ExpandEnv("$HOME/transcoder/config.yaml"),
 	}
+	m.initSettingsInputs()
 	m.addLog("INFO", "Transcoder TUI started")
 	return m
+}
+
+// initSettingsInputs initializes the textinput fields for settings
+func (m *Model) initSettingsInputs() {
+	inputs := make([]textinput.Model, 9)
+
+	// 0: Host
+	inputs[0] = textinput.New()
+	inputs[0].Placeholder = "Remote host"
+	inputs[0].SetValue(m.cfg.Remote.Host)
+	inputs[0].CharLimit = 100
+
+	// 1: User
+	inputs[1] = textinput.New()
+	inputs[1].Placeholder = "SSH user"
+	inputs[1].SetValue(m.cfg.Remote.User)
+	inputs[1].CharLimit = 50
+
+	// 2: Port
+	inputs[2] = textinput.New()
+	inputs[2].Placeholder = "SSH port"
+	inputs[2].SetValue(fmt.Sprintf("%d", m.cfg.Remote.Port))
+	inputs[2].CharLimit = 5
+
+	// 3: SSH Key
+	inputs[3] = textinput.New()
+	inputs[3].Placeholder = "SSH key path"
+	inputs[3].SetValue(m.cfg.Remote.SSHKey)
+	inputs[3].CharLimit = 200
+
+	// 4: Quality
+	inputs[4] = textinput.New()
+	inputs[4].Placeholder = "Quality (0-100)"
+	inputs[4].SetValue(fmt.Sprintf("%d", m.cfg.Encoder.Quality))
+	inputs[4].CharLimit = 3
+
+	// 5: Preset
+	inputs[5] = textinput.New()
+	inputs[5].Placeholder = "Encoder preset"
+	inputs[5].SetValue(m.cfg.Encoder.Preset)
+	inputs[5].CharLimit = 20
+
+	// 6: Max Workers
+	inputs[6] = textinput.New()
+	inputs[6].Placeholder = "Max workers"
+	inputs[6].SetValue(fmt.Sprintf("%d", m.cfg.Workers.MaxWorkers))
+	inputs[6].CharLimit = 3
+
+	// 7: Work Directory
+	inputs[7] = textinput.New()
+	inputs[7].Placeholder = "Work directory"
+	inputs[7].SetValue(m.cfg.Workers.WorkDir)
+	inputs[7].CharLimit = 200
+
+	// 8: Database Path
+	inputs[8] = textinput.New()
+	inputs[8].Placeholder = "Database path"
+	inputs[8].SetValue(m.cfg.Database.Path)
+	inputs[8].CharLimit = 200
+
+	m.settingsInputs = inputs
 }
 
 // Init initializes the model
@@ -527,8 +597,158 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// applySettingValue validates and applies the textinput value to the config
+func (m *Model) applySettingValue(index int) error {
+	value := m.settingsInputs[index].Value()
+
+	switch index {
+	case 0: // Host
+		if value == "" {
+			return fmt.Errorf("host cannot be empty")
+		}
+		m.cfg.Remote.Host = value
+		m.configModified = true
+
+	case 1: // User
+		if value == "" {
+			return fmt.Errorf("user cannot be empty")
+		}
+		m.cfg.Remote.User = value
+		m.configModified = true
+
+	case 2: // Port
+		var port int
+		if _, err := fmt.Sscanf(value, "%d", &port); err != nil {
+			return fmt.Errorf("port must be a number")
+		}
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("port must be between 1 and 65535")
+		}
+		m.cfg.Remote.Port = port
+		m.configModified = true
+
+	case 3: // SSH Key
+		if value == "" {
+			return fmt.Errorf("SSH key path cannot be empty")
+		}
+		m.cfg.Remote.SSHKey = value
+		m.configModified = true
+
+	case 4: // Quality
+		var quality int
+		if _, err := fmt.Sscanf(value, "%d", &quality); err != nil {
+			return fmt.Errorf("quality must be a number")
+		}
+		if quality < 0 || quality > 100 {
+			return fmt.Errorf("quality must be between 0 and 100")
+		}
+		m.cfg.Encoder.Quality = quality
+		m.configModified = true
+
+	case 5: // Preset
+		validPresets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+		valid := false
+		for _, p := range validPresets {
+			if value == p {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("preset must be one of: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow")
+		}
+		m.cfg.Encoder.Preset = value
+		m.configModified = true
+
+	case 6: // Max Workers
+		var workers int
+		if _, err := fmt.Sscanf(value, "%d", &workers); err != nil {
+			return fmt.Errorf("max workers must be a number")
+		}
+		if workers < 0 {
+			return fmt.Errorf("max workers cannot be negative")
+		}
+		// Scale the worker pool
+		m.workerPool.ScaleWorkers(workers)
+		m.configModified = true
+
+	case 7: // Work Directory
+		if value == "" {
+			return fmt.Errorf("work directory cannot be empty")
+		}
+		m.cfg.Workers.WorkDir = value
+		m.configModified = true
+
+	case 8: // Database Path
+		if value == "" {
+			return fmt.Errorf("database path cannot be empty")
+		}
+		m.cfg.Database.Path = value
+		m.configModified = true
+	}
+
+	return nil
+}
+
+// revertSettingValue reverts the textinput to the current config value
+func (m *Model) revertSettingValue(index int) {
+	switch index {
+	case 0:
+		m.settingsInputs[index].SetValue(m.cfg.Remote.Host)
+	case 1:
+		m.settingsInputs[index].SetValue(m.cfg.Remote.User)
+	case 2:
+		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Remote.Port))
+	case 3:
+		m.settingsInputs[index].SetValue(m.cfg.Remote.SSHKey)
+	case 4:
+		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Encoder.Quality))
+	case 5:
+		m.settingsInputs[index].SetValue(m.cfg.Encoder.Preset)
+	case 6:
+		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Workers.MaxWorkers))
+	case 7:
+		m.settingsInputs[index].SetValue(m.cfg.Workers.WorkDir)
+	case 8:
+		m.settingsInputs[index].SetValue(m.cfg.Database.Path)
+	}
+}
+
 // handleSettingsKeys handles keys in settings view
 func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// If we're editing a field, handle it specially
+	if m.isEditingSettings {
+		switch msg.String() {
+		case "enter":
+			// Save the current value
+			if err := m.applySettingValue(m.selectedSetting); err != nil {
+				m.validationError = err.Error()
+				return m, nil
+			}
+			m.validationError = ""
+			m.isEditingSettings = false
+			m.settingsInputs[m.selectedSetting].Blur()
+			m.statusMsg = "Setting updated"
+			return m, nil
+
+		case "esc":
+			// Cancel editing and revert to original value
+			m.isEditingSettings = false
+			m.settingsInputs[m.selectedSetting].Blur()
+			m.validationError = ""
+			// Revert to config value
+			m.revertSettingValue(m.selectedSetting)
+			return m, nil
+
+		default:
+			// Pass key to textinput
+			var cmd tea.Cmd
+			m.settingsInputs[m.selectedSetting], cmd = m.settingsInputs[m.selectedSetting].Update(msg)
+			return m, cmd
+		}
+	}
+
+	// Not editing - handle navigation and other keys
 	switch msg.String() {
 	case "up", "k":
 		if m.selectedSetting > 0 {
@@ -536,63 +756,23 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.selectedSetting < 2 { // 3 editable settings (0-2)
+		if m.selectedSetting < 8 { // 9 editable settings (0-8)
 			m.selectedSetting++
 		}
 
-	case "left", "h", "-":
-		m.configModified = true
-		switch m.selectedSetting {
-		case 0: // Max Workers (can go to 0 for wind-down before shutdown)
-			if m.cfg.Workers.MaxWorkers > 0 {
-				m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers - 1)
-				m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
-			}
-		case 1: // Quality
-			if m.cfg.Encoder.Quality > 10 {
-				m.cfg.Encoder.Quality -= 5
-				m.statusMsg = fmt.Sprintf("Quality: %d", m.cfg.Encoder.Quality)
-			}
-		case 2: // Preset cycle
-			presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
-			for i, p := range presets {
-				if m.cfg.Encoder.Preset == p && i > 0 {
-					m.cfg.Encoder.Preset = presets[i-1]
-					m.statusMsg = fmt.Sprintf("Preset: %s", m.cfg.Encoder.Preset)
-					break
-				}
-			}
-		}
+	case "enter":
+		// Start editing the selected field
+		m.isEditingSettings = true
+		m.settingsInputs[m.selectedSetting].Focus()
+		m.validationError = ""
+		return m, textinput.Blink
 
-	case "right", "l", "+", "=":
-		m.configModified = true
-		switch m.selectedSetting {
-		case 0: // Max Workers
-			m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers + 1)
-			m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
-		case 1: // Quality
-			if m.cfg.Encoder.Quality < 100 {
-				m.cfg.Encoder.Quality += 5
-				m.statusMsg = fmt.Sprintf("Quality: %d", m.cfg.Encoder.Quality)
-			}
-		case 2: // Preset cycle
-			presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
-			for i, p := range presets {
-				if m.cfg.Encoder.Preset == p && i < len(presets)-1 {
-					m.cfg.Encoder.Preset = presets[i+1]
-					m.statusMsg = fmt.Sprintf("Preset: %s", m.cfg.Encoder.Preset)
-					break
-				}
-			}
-		}
-
-	case "w":
-		// Save config
-		configPath := os.ExpandEnv("$HOME/transcoder/config.yaml")
-		if err := m.cfg.Save(configPath); err != nil {
+	case "ctrl+s":
+		// Save config to file
+		if err := m.cfg.Save(m.configPath); err != nil {
 			m.errorMsg = fmt.Sprintf("Failed to save config: %v", err)
 		} else {
-			m.statusMsg = "Configuration saved!"
+			m.statusMsg = "Configuration saved to file!"
 			m.configModified = false
 		}
 	}
