@@ -136,8 +136,10 @@ flowchart TD
 
 ### Work Directory Structure
 
+Default: `~/transcoder_temp/` (configurable via `workers.work_dir`)
+
 ```
-~/.transcoder/work/
+~/transcoder_temp/
 ├── job-123/
 │   ├── Movie.Name.2024.mkv           # Downloaded input
 │   └── transcoded_Movie.Name.2024.mkv # Transcoded output
@@ -293,11 +295,11 @@ remote:
   library_path: "/path/to/media"
 
 local:
-  database_path: "~/.transcoder/transcoder.db"
+  database_path: "~/transcoder/transcoder.db"
 
 workers:
   max_workers: 2
-  work_dir: "~/.transcoder/work"
+  work_dir: "~/transcoder_temp"
 
 encoding:
   codec: "libx265"
