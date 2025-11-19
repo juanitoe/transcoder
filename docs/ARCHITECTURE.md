@@ -110,12 +110,11 @@ flowchart TD
 
     M -->|Yes| O[Delete original file]
     O --> P[Rename temp to original]
-    P --> Q[Verify final remote checksum]
 
-    Q --> R[Mark job completed]
-    R --> S[Clean up work directory]
+    P --> Q[Mark job completed]
+    Q --> R[Clean up work directory]
 
-    N --> T[Clean up & retry later]
+    N --> S[Clean up & retry later]
 ```
 
 ---
@@ -213,16 +212,20 @@ encoding:
 
 ### Atomic File Replacement
 1. Upload to `filename.transcoded` (temp)
-2. Verify upload checksum
+2. Verify upload checksum matches local output
 3. Delete original
 4. Rename temp to original
-5. Verify final checksum
 
 ### Worker Pool
 - Configurable number of concurrent workers
 - Each worker has dedicated SSH connection
 - Progress updates via channel to TUI
 - Pause/cancel support per job
+- **Graceful scaling**: Workers complete current job before stopping when scaled down
+
+### Progress Tracking
+- **Download/Upload**: Byte-based progress (bytes transferred / total bytes)
+- **Transcoding**: Time-based progress using `out_time_us` from ffmpeg (more reliable than frame count)
 
 ---
 
@@ -232,3 +235,4 @@ encoding:
 2. **Lazy checksum backfill** - First scan is fast, checksums fill in later
 3. **Size-based change detection** - No need to read file contents
 4. **Streaming checksum calculation** - Zero overhead during transfers
+5. **No redundant verification** - Upload checksum verified during transfer, no re-read after
