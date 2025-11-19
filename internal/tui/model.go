@@ -590,17 +590,6 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewLogs
 		return m, nil
 
-	case "s":
-		// Start scan
-		if !m.scanning {
-			m.scanning = true
-			m.statusMsg = "Starting scan..."
-			m.errorMsg = "" // Clear any previous errors
-			m.addLog("INFO", "Starting library scan")
-			return m, scanLibrary(m.scanner, m.db)
-		}
-		return m, nil
-
 	case "r":
 		// Refresh data
 		m.refreshData()
@@ -608,7 +597,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// View-specific keys
+	// View-specific keys (handle first to allow view-specific overrides)
 	switch m.viewMode {
 	case ViewJobs:
 		return m.handleJobListKeys(msg)
@@ -616,6 +605,20 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSettingsKeys(msg)
 	case ViewLogs:
 		return m.handleLogsKeys(msg)
+	}
+
+	// Other global keys (after view-specific to allow overrides)
+	switch msg.String() {
+	case "s":
+		// Start scan (not available in Settings view - 's' is used for save there)
+		if m.viewMode != ViewSettings && !m.scanning {
+			m.scanning = true
+			m.statusMsg = "Starting scan..."
+			m.errorMsg = "" // Clear any previous errors
+			m.addLog("INFO", "Starting library scan")
+			return m, scanLibrary(m.scanner, m.db)
+		}
+		return m, nil
 	}
 
 	return m, nil

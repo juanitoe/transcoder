@@ -750,7 +750,7 @@ func (m Model) renderHelp() string {
 			"  [1-6]         Switch views\n" +
 			"  [h/?]         Toggle help\n" +
 			"  [r]           Refresh data\n" +
-			"  [s]           Start library scan\n" +
+			"  [s]           Start library scan (except in Settings)\n" +
 			"  [q/Ctrl+C]    Quit\n\n" +
 			"Jobs View:\n" +
 			"  [↑/↓] or j/k  Navigate jobs\n" +
@@ -761,6 +761,10 @@ func (m Model) renderHelp() string {
 			"  [c]           Cancel job\n" +
 			"  [Enter]       Resume paused job\n\n" +
 			"Settings:\n" +
+			"  [↑/↓]         Navigate settings\n" +
+			"  [Enter]       Edit selected setting\n" +
+			"  [s]           Save/discard changes\n" +
+			"  [Ctrl+S]      Quick save (no prompt)\n" +
 			"  [+/-]         Scale worker count\n",
 	)
 
