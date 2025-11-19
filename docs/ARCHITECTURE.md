@@ -334,11 +334,12 @@ encoding:
 4. Rename temp to original
 
 ### Worker Pool
-- Configurable number of concurrent workers
+- Configurable number of concurrent workers (0 to N)
 - Each worker has dedicated SSH connection
 - Progress updates via channel to TUI
 - Pause/cancel support per job
 - **Graceful scaling**: Workers complete current job before stopping when scaled down
+- **Wind-down mode**: Set workers to 0 before shutdown/maintenance - active jobs complete, no new jobs claimed
 
 ### Progress Tracking
 - **Download/Upload**: Byte-based progress (bytes transferred / total bytes)
