@@ -129,6 +129,9 @@ type Model struct {
 	// Job actions
 	showJobActionDropdown  bool // Show job action dropdown menu
 	jobActionDropdownIndex int  // Currently highlighted action in dropdown
+	editingPriority        bool // Editing job priority
+	priorityInput          textinput.Model
+	priorityEditJobID      int64 // ID of job being edited
 
 	// Logs
 	logs            []string
@@ -164,6 +167,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 		configPath:     os.ExpandEnv("$HOME/transcoder/config.yaml"),
 	}
 	m.initSettingsInputs()
+	m.initPriorityInput()
 	m.addLog("INFO", "Transcoder TUI started")
 	return m
 }
@@ -227,6 +231,27 @@ func (m *Model) initSettingsInputs() {
 	inputs[8].CharLimit = 200
 
 	m.settingsInputs = inputs
+}
+
+// initPriorityInput initializes the textinput field for priority editing
+func (m *Model) initPriorityInput() {
+	ti := textinput.New()
+	ti.Placeholder = "Enter priority (0-100)"
+	ti.CharLimit = 3
+	ti.Width = 20
+	// Only allow digits
+	ti.Validate = func(s string) error {
+		if s == "" {
+			return nil
+		}
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return fmt.Errorf("priority must be a number")
+			}
+		}
+		return nil
+	}
+	m.priorityInput = ti
 }
 
 // Init initializes the model
@@ -360,6 +385,11 @@ func (m Model) View() string {
 		renderedContent = m.overlayJobActionDropdown(renderedContent)
 	}
 
+	// Overlay priority input if visible
+	if m.viewMode == ViewJobs && m.editingPriority {
+		renderedContent = m.overlayPriorityInput(renderedContent)
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
@@ -436,6 +466,87 @@ func (m Model) overlayJobActionDropdown(content string) string {
 					overlaidLine = leftPart + dropdownLine + line[endX:]
 				} else {
 					overlaidLine = leftPart + dropdownLine
+				}
+			}
+			result.WriteString(overlaidLine)
+		} else {
+			result.WriteString(line)
+		}
+		if i < len(contentLines)-1 {
+			result.WriteString("\n")
+		}
+	}
+
+	return result.String()
+}
+
+// overlayPriorityInput overlays the priority input on top of the content
+func (m Model) overlayPriorityInput(content string) string {
+	// Get current job
+	var jobs []*types.TranscodeJob
+	var scrollOffset int
+
+	if m.jobsPanel == 0 {
+		jobs = m.activeJobs
+		scrollOffset = m.activeJobsScrollOffset
+	} else {
+		jobs = m.queuedJobs
+		scrollOffset = m.queuedJobsScrollOffset
+	}
+
+	if m.selectedJob >= len(jobs) {
+		return content
+	}
+
+	// Calculate Y position of selected job
+	baseY := 8
+	visibleJobIndex := m.selectedJob - scrollOffset
+	if visibleJobIndex < 0 {
+		return content
+	}
+
+	// Each job takes 4 lines
+	jobY := baseY + (visibleJobIndex * 4)
+
+	// Position input below the selected job
+	inputY := jobY + 4
+
+	// X position: indent from left edge
+	inputX := 6
+
+	// Render the priority input box
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("42")).
+		Padding(0, 1).
+		Render(
+			"Edit Priority:\n" +
+				m.priorityInput.View() + "\n" +
+				helpStyle.Render("[Enter] Save  •  [Esc] Cancel"),
+		)
+
+	// Split content into lines
+	contentLines := strings.Split(content, "\n")
+	inputLines := strings.Split(inputBox, "\n")
+
+	// Create new content with input overlaid
+	var result strings.Builder
+	for i, line := range contentLines {
+		if i >= inputY && i < inputY+len(inputLines) {
+			// Overlay this line with input
+			inputLine := inputLines[i-inputY]
+
+			// Build the overlaid line
+			var overlaidLine string
+			if len(line) < inputX {
+				overlaidLine = line + strings.Repeat(" ", inputX-len(line)) + inputLine
+			} else {
+				leftPart := line[:inputX]
+				endX := inputX + len(inputLine)
+				if endX < len(line) {
+					overlaidLine = leftPart + inputLine + line[endX:]
+				} else {
+					overlaidLine = leftPart + inputLine
 				}
 			}
 			result.WriteString(overlaidLine)
@@ -760,6 +871,11 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleJobActionDropdown(msg)
 	}
 
+	// Handle priority editing
+	if m.editingPriority {
+		return m.handlePriorityEdit(msg)
+	}
+
 	// Get current job list based on panel
 	var jobs []*types.TranscodeJob
 	var scrollOffset *int
@@ -929,6 +1045,53 @@ func (m Model) handleJobActionDropdown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handlePriorityEdit handles keys when editing job priority
+func (m Model) handlePriorityEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		// Save the new priority
+		priorityStr := m.priorityInput.Value()
+		if priorityStr == "" {
+			m.errorMsg = "Priority cannot be empty"
+			return m, nil
+		}
+
+		var priority int
+		_, err := fmt.Sscanf(priorityStr, "%d", &priority)
+		if err != nil || priority < 0 || priority > 100 {
+			m.errorMsg = "Priority must be between 0 and 100"
+			return m, nil
+		}
+
+		if err := m.db.UpdateJobPriority(m.priorityEditJobID, priority); err != nil {
+			m.errorMsg = fmt.Sprintf("Failed to update priority: %v", err)
+		} else {
+			m.statusMsg = fmt.Sprintf("Updated job #%d priority to %d", m.priorityEditJobID, priority)
+			m.addLog("INFO", fmt.Sprintf("Updated job #%d priority to %d", m.priorityEditJobID, priority))
+			m.refreshData()
+		}
+
+		m.editingPriority = false
+		m.priorityInput.Blur()
+		m.priorityInput.SetValue("")
+		return m, nil
+
+	case "esc":
+		// Cancel editing
+		m.editingPriority = false
+		m.priorityInput.Blur()
+		m.priorityInput.SetValue("")
+		m.statusMsg = "Priority edit canceled"
+		return m, nil
+
+	default:
+		// Pass key to textinput
+		var cmd tea.Cmd
+		m.priorityInput, cmd = m.priorityInput.Update(msg)
+		return m, cmd
+	}
+}
+
 // JobAction represents an available action for a job
 type JobAction struct {
 	action      string
@@ -1048,8 +1211,12 @@ func (m *Model) executeJobAction(job *types.TranscodeJob, action string) {
 		}
 
 	case "priority":
-		// TODO: Implement priority adjustment UI
-		m.statusMsg = "Priority adjustment not yet implemented"
+		// Start priority editing
+		m.editingPriority = true
+		m.priorityEditJobID = job.ID
+		m.priorityInput.SetValue(fmt.Sprintf("%d", job.Priority))
+		m.priorityInput.Focus()
+		m.statusMsg = fmt.Sprintf("Editing priority for job #%d (current: %d)", job.ID, job.Priority)
 	}
 }
 
