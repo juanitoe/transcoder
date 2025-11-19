@@ -571,9 +571,15 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// TODO: Click-to-select jobs disabled due to dynamic layout complexity
-	// The job positions vary based on selection state, dropdown visibility, and scroll indicators
-	// Use keyboard navigation (↑↓) or mouse wheel instead
+	// Handle clicks on individual jobs in Jobs view
+	if m.viewMode == ViewJobs && msg.Y >= 8 {
+		// Calculate which job was clicked based on dynamic layout
+		jobIndex := m.calculateJobIndexFromClick(msg.Y)
+		if jobIndex >= 0 {
+			m.selectedJob = jobIndex
+			return m, nil
+		}
+	}
 
 	// Handle clicks on Settings fields
 	// Settings layout: header(0), status(1), empty(2), box_border(3), title(4), empty(5)
@@ -607,6 +613,65 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// calculateJobIndexFromClick calculates which job was clicked based on Y position
+func (m Model) calculateJobIndexFromClick(clickY int) int {
+	// Get current job list based on panel
+	var jobs []*types.TranscodeJob
+	var scrollOffset int
+
+	if m.jobsPanel == 0 {
+		jobs = m.activeJobs
+		scrollOffset = m.activeJobsScrollOffset
+	} else {
+		jobs = m.queuedJobs
+		scrollOffset = m.queuedJobsScrollOffset
+	}
+
+	visibleHeight := m.calculateVisibleJobsHeight()
+
+	// Calculate starting Y position
+	// header(0) + status(1) + empty(2) + box_border(3) + panel_tabs(4) + empty(5) + total_line(6) + empty(7) = jobs_start(8)
+	currentY := 8
+
+	// Calculate visible window
+	startIdx := scrollOffset
+	endIdx := startIdx + visibleHeight
+	if endIdx > len(jobs) {
+		endIdx = len(jobs)
+	}
+
+	// Iterate through visible jobs and track Y positions
+	for i := startIdx; i < endIdx; i++ {
+		job := jobs[i]
+		isSelected := (i == m.selectedJob)
+
+		// Each job has:
+		// - Job info line (1 line)
+		// - Status line (1 line)
+		// - Progress line (1 line)
+		// - Spacing (1 line)
+		jobStartY := currentY
+		jobEndY := currentY + 4
+
+		// If this job is selected and dropdown is shown, add dropdown height
+		if isSelected && m.showJobActionDropdown {
+			actions := m.getJobActions(job)
+			// Dropdown adds: empty line + N action lines + empty line + help line + border lines
+			dropdownHeight := len(actions) + 5
+			jobEndY += dropdownHeight
+		}
+
+		// Check if click falls within this job's range
+		if clickY >= jobStartY && clickY < jobEndY {
+			return i
+		}
+
+		currentY = jobEndY
+	}
+
+	return -1 // No job clicked
 }
 
 // handleJobListKeys handles keys in job list views
