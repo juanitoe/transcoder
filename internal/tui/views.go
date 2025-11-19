@@ -90,16 +90,23 @@ func (m Model) renderDashboard() string {
 
 	stats := m.statistics
 
-	// Calculate consistent box widths
-	panelWidth := (m.width / 3) - boxPadding
-	if panelWidth < 35 {
-		panelWidth = 35 // Minimum width for readability
+	// Calculate box widths for better layout
+	// Left column (Stats + Worker): ~35% of width
+	// Right column (Active Jobs): ~60% of width
+	// Spacing between columns: 4 chars
+	leftPanelWidth := int(float64(m.width) * 0.35)
+	if leftPanelWidth < 35 {
+		leftPanelWidth = 35 // Minimum width for readability
+	}
+
+	rightPanelWidth := m.width - leftPanelWidth - 6 // 6 for spacing and margins
+	if rightPanelWidth < 40 {
+		rightPanelWidth = 40
 	}
 
 	// Statistics boxes
 	statsBox := boxStyle.Copy().
-		Width(panelWidth).
-		MaxWidth(panelWidth).
+		Width(leftPanelWidth).
 		Render(fmt.Sprintf(
 		"📊 Library Statistics\n\n"+
 			"Total Files:      %d\n"+
@@ -123,8 +130,7 @@ func (m Model) renderDashboard() string {
 
 	// Worker status
 	workerBox := boxStyle.Copy().
-		Width(panelWidth).
-		MaxWidth(panelWidth).
+		Width(leftPanelWidth).
 		Render(fmt.Sprintf(
 			"⚙️  Worker Status\n\n"+
 				"Active Workers:   %d\n"+
@@ -183,18 +189,18 @@ func (m Model) renderDashboard() string {
 		}
 	}
 	activeBox := boxStyle.Copy().
-		Width(panelWidth).
-		MaxWidth(panelWidth).
+		Width(rightPanelWidth).
 		Render(activeJobsStr)
 
-	// Layout: Two columns
+	// Layout: Two columns with spacing
 	leftCol := lipgloss.JoinVertical(lipgloss.Left, statsBox, workerBox)
-	rightCol := activeBox
+	spacer := strings.Repeat(" ", 2) // Horizontal spacing between columns
 
 	dashboard := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		leftCol,
-		rightCol,
+		spacer,
+		activeBox,
 	)
 
 	if m.showHelp {
