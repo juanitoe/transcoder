@@ -173,7 +173,13 @@ func (e *Encoder) buildFFmpegArgs(inputPath, outputPath string) []string {
 
 // Verify checks if a transcoded file is valid and playable
 func (e *Encoder) Verify(ctx context.Context, filePath string) error {
-	// Use ffprobe to verify the file
+	_, err := e.GetDuration(ctx, filePath)
+	return err
+}
+
+// GetDuration returns the duration of a video file in seconds
+func (e *Encoder) GetDuration(ctx context.Context, filePath string) (float64, error) {
+	// Use ffprobe to get the duration
 	cmd := exec.CommandContext(ctx, "ffprobe",
 		"-v", "error",
 		"-show_entries", "format=duration",
@@ -183,14 +189,39 @@ func (e *Encoder) Verify(ctx context.Context, filePath string) error {
 
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("verification failed: %w", err)
+		return 0, fmt.Errorf("verification failed: %w", err)
 	}
 
 	// Check if we got a valid duration
 	durationStr := strings.TrimSpace(string(output))
 	duration, err := strconv.ParseFloat(durationStr, 64)
 	if err != nil || duration <= 0 {
-		return fmt.Errorf("invalid video duration: %s", durationStr)
+		return 0, fmt.Errorf("invalid video duration: %s", durationStr)
+	}
+
+	return duration, nil
+}
+
+// VerifyDuration checks if a transcoded file has the expected duration (within tolerance)
+func (e *Encoder) VerifyDuration(ctx context.Context, filePath string, expectedDuration float64) error {
+	actualDuration, err := e.GetDuration(ctx, filePath)
+	if err != nil {
+		return err
+	}
+
+	// Allow 1 second tolerance or 1% difference, whichever is greater
+	tolerance := expectedDuration * 0.01
+	if tolerance < 1.0 {
+		tolerance = 1.0
+	}
+
+	diff := expectedDuration - actualDuration
+	if diff < 0 {
+		diff = -diff
+	}
+
+	if diff > tolerance {
+		return fmt.Errorf("duration mismatch: expected %.1fs, got %.1fs (diff: %.1fs)", expectedDuration, actualDuration, diff)
 	}
 
 	return nil

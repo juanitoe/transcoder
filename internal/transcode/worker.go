@@ -299,19 +299,41 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Stage 2: Transcode (skip if output already exists and is valid - recovered job)
 	var localOutputChecksum string
 	if _, err := os.Stat(localOutputPath); err == nil {
-		// Transcoded file exists - verify it's valid
-		if err := w.encoder.Verify(jobCtx, localOutputPath); err == nil {
-			// Valid transcoded file - skip to upload
-			w.updateProgress(job.ID, types.StageTranscode, 100, "Transcode skipped (file already exists)", 0, 0)
-			result, err := checksum.CalculateFile(localOutputPath)
-			if err != nil {
-				w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
-				return
+		// Transcoded file exists - verify it's valid AND has correct duration
+		mediaFile, _ := w.db.GetMediaFileByPath(job.FilePath)
+		var expectedDuration float64
+		if mediaFile != nil {
+			expectedDuration = mediaFile.DurationSeconds
+		}
+
+		// Verify duration matches (prevents uploading truncated files)
+		if expectedDuration > 0 {
+			if err := w.encoder.VerifyDuration(jobCtx, localOutputPath, expectedDuration); err == nil {
+				// Valid transcoded file with correct duration - skip to upload
+				w.updateProgress(job.ID, types.StageTranscode, 100, "Transcode skipped (file already exists)", 0, 0)
+				result, err := checksum.CalculateFile(localOutputPath)
+				if err != nil {
+					w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
+					return
+				}
+				localOutputChecksum = result.Hash
+			} else {
+				// Invalid or truncated file - remove and re-transcode
+				os.Remove(localOutputPath)
 			}
-			localOutputChecksum = result.Hash
 		} else {
-			// Invalid file - remove and re-transcode
-			os.Remove(localOutputPath)
+			// No expected duration - fall back to basic verify
+			if err := w.encoder.Verify(jobCtx, localOutputPath); err == nil {
+				w.updateProgress(job.ID, types.StageTranscode, 100, "Transcode skipped (file already exists)", 0, 0)
+				result, err := checksum.CalculateFile(localOutputPath)
+				if err != nil {
+					w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
+					return
+				}
+				localOutputChecksum = result.Hash
+			} else {
+				os.Remove(localOutputPath)
+			}
 		}
 	}
 
