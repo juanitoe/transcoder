@@ -304,20 +304,8 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 			s.logDebug("Metadata extracted successfully: codec=%s, resolution=%dx%d",
 				metadata.Codec, metadata.ResolutionWidth, metadata.ResolutionHeight)
 
-			// Calculate checksum for new/changed files
-			s.logDebug("Calculating checksum for %s", fullPath)
-			remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
-			if err != nil {
-				s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
-			} else {
-				metadata.SourceChecksum = remoteChecksum
-				metadata.SourceChecksumAlgo = string(s.checksumAlgo)
-				now := time.Now()
-				metadata.SourceChecksumAt = &now
-			}
-
 			if existing == nil {
-				// New file - add to database
+				// New file - add to database without checksum (will be backfilled on next scan)
 				_, err = s.db.AddMediaFile(metadata)
 				if err != nil {
 					progress.ErrorCount++
@@ -329,8 +317,19 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 				}
 				progress.FilesAdded++
 			} else {
-				// Existing file with changed size - update
+				// Existing file with changed size - update with new checksum
 				s.logDebug("File size changed for %s: %d -> %d", fullPath, existing.FileSizeBytes, fileSize)
+
+				remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
+				if err != nil {
+					s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
+				} else {
+					metadata.SourceChecksum = remoteChecksum
+					metadata.SourceChecksumAlgo = string(s.checksumAlgo)
+					now := time.Now()
+					metadata.SourceChecksumAt = &now
+				}
+
 				metadata.ID = existing.ID
 				if err := s.db.UpdateMediaFile(existing.ID, metadata); err != nil {
 					progress.ErrorCount++
