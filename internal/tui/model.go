@@ -456,19 +456,16 @@ func (m Model) overlayJobActionDropdown(content string) string {
 			dropdownLine := dropdownLines[i-dropdownY]
 
 			// Build the overlaid line: original line with dropdown on top
+			// Note: We don't preserve content after the dropdown to avoid artifacts
+			// from ANSI escape codes affecting length calculations
 			var overlaidLine string
 			if len(line) < dropdownX {
 				// Pad line to reach dropdownX
 				overlaidLine = line + strings.Repeat(" ", dropdownX-len(line)) + dropdownLine
 			} else {
-				// Take left part, add dropdown, keep any remainder
+				// Take left part, add dropdown
 				leftPart := line[:dropdownX]
-				endX := dropdownX + len(dropdownLine)
-				if endX < len(line) {
-					overlaidLine = leftPart + dropdownLine + line[endX:]
-				} else {
-					overlaidLine = leftPart + dropdownLine
-				}
+				overlaidLine = leftPart + dropdownLine
 			}
 			result.WriteString(overlaidLine)
 		} else {
@@ -539,17 +536,14 @@ func (m Model) overlayPriorityInput(content string) string {
 			inputLine := inputLines[i-inputY]
 
 			// Build the overlaid line
+			// Note: We don't preserve content after the overlay to avoid artifacts
+			// from ANSI escape codes affecting length calculations
 			var overlaidLine string
 			if len(line) < inputX {
 				overlaidLine = line + strings.Repeat(" ", inputX-len(line)) + inputLine
 			} else {
 				leftPart := line[:inputX]
-				endX := inputX + len(inputLine)
-				if endX < len(line) {
-					overlaidLine = leftPart + inputLine + line[endX:]
-				} else {
-					overlaidLine = leftPart + inputLine
-				}
+				overlaidLine = leftPart + inputLine
 			}
 			result.WriteString(overlaidLine)
 		} else {
