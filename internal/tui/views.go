@@ -478,7 +478,7 @@ func (m Model) renderSettings() string {
 	for i := 4; i < 6; i++ {
 		prefix := "  "
 		if i == m.selectedSetting {
-			if m.isEditingSettings {
+			if m.isEditingSettings && !m.showPresetDropdown {
 				prefix = editingStyle.Render("▶ ")
 			} else {
 				prefix = selectedStyle.Render("▶ ")
@@ -489,10 +489,15 @@ func (m Model) renderSettings() string {
 
 		label := labelStyle.Render(settingNames[i])
 		value := m.settingsInputs[i].Value()
-		if i == m.selectedSetting && m.isEditingSettings {
+		if i == m.selectedSetting && m.isEditingSettings && !m.showPresetDropdown {
 			value = m.settingsInputs[i].View()
 		}
 		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+
+		// Show dropdown after Preset field if active
+		if i == 5 && m.showPresetDropdown {
+			content += m.renderPresetDropdown()
+		}
 	}
 
 	// Worker Configuration
@@ -544,7 +549,9 @@ func (m Model) renderSettings() string {
 
 	// Help text
 	content += "\n\n"
-	if m.isEditingSettings {
+	if m.showPresetDropdown {
+		// Help text is shown in the dropdown itself
+	} else if m.isEditingSettings {
 		content += helpStyle.Render("[Enter] Save • [Esc] Cancel")
 	} else {
 		content += helpStyle.Render("[↑↓] Navigate • [Enter] Edit • [Ctrl+S] Save to file")
@@ -555,6 +562,59 @@ func (m Model) renderSettings() string {
 	}
 
 	return boxStyle.Render(content)
+}
+
+// renderPresetDropdown renders a visual dropdown menu for encoder presets
+func (m Model) renderPresetDropdown() string {
+	presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+	descriptions := []string{
+		"Fastest encoding, largest files",
+		"Very fast, larger files",
+		"Fast encoding, large files",
+		"Faster encoding, balanced",
+		"Fast, good balance",
+		"Balanced speed/quality",
+		"Slower, smaller files",
+		"Very slow, much smaller",
+		"Slowest, smallest files",
+	}
+
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	for i, preset := range presets {
+		var line string
+		if i == m.presetDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-10s ", preset))
+			line += " " + descStyle.Render(descriptions[i])
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %-10s ", preset))
+			line += " " + descStyle.Render(descriptions[i])
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
 }
 
 // renderScanner renders the scanner view

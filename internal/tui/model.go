@@ -119,10 +119,12 @@ type Model struct {
 	configModified bool
 
 	// Settings editing
-	isEditingSettings bool
-	settingsInputs    []textinput.Model
-	validationError   string
-	configPath        string // Path to save config
+	isEditingSettings   bool
+	settingsInputs      []textinput.Model
+	validationError     string
+	configPath          string // Path to save config
+	showPresetDropdown  bool   // Show preset dropdown menu
+	presetDropdownIndex int    // Currently highlighted preset in dropdown
 
 	// Logs
 	logs            []string
@@ -746,6 +748,39 @@ func (m *Model) revertSettingValue(index int) {
 
 // handleSettingsKeys handles keys in settings view
 func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle preset dropdown navigation
+	if m.showPresetDropdown {
+		presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+
+		switch msg.String() {
+		case "up", "k":
+			if m.presetDropdownIndex > 0 {
+				m.presetDropdownIndex--
+			}
+			return m, nil
+		case "down", "j":
+			if m.presetDropdownIndex < len(presets)-1 {
+				m.presetDropdownIndex++
+			}
+			return m, nil
+		case "enter":
+			// Select the highlighted preset
+			m.cfg.Encoder.Preset = presets[m.presetDropdownIndex]
+			m.settingsInputs[5].SetValue(presets[m.presetDropdownIndex])
+			m.showPresetDropdown = false
+			m.isEditingSettings = false
+			m.configModified = true
+			m.statusMsg = fmt.Sprintf("Preset set to: %s", presets[m.presetDropdownIndex])
+			return m, nil
+		case "esc":
+			// Cancel dropdown
+			m.showPresetDropdown = false
+			m.isEditingSettings = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// If we're editing a field, handle it specially
 	if m.isEditingSettings {
 		switch msg.String() {
@@ -792,10 +827,29 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		// Start editing the selected field
-		m.isEditingSettings = true
-		m.settingsInputs[m.selectedSetting].Focus()
-		m.validationError = ""
-		return m, textinput.Blink
+		if m.selectedSetting == 5 {
+			// Preset field - show dropdown instead
+			m.isEditingSettings = true
+			m.showPresetDropdown = true
+			m.validationError = ""
+
+			// Find current preset index
+			presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+			currentPreset := m.cfg.Encoder.Preset
+			for i, p := range presets {
+				if p == currentPreset {
+					m.presetDropdownIndex = i
+					break
+				}
+			}
+			return m, nil
+		} else {
+			// Regular textinput editing
+			m.isEditingSettings = true
+			m.settingsInputs[m.selectedSetting].Focus()
+			m.validationError = ""
+			return m, textinput.Blink
+		}
 
 	case "ctrl+s":
 		// Save config to file
