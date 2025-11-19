@@ -188,6 +188,116 @@ func (db *DB) UpdateMediaFileChecksum(id int64, checksum, algo string) error {
 	return err
 }
 
+// AddMediaFileBatch adds multiple media files in a single transaction
+func (db *DB) AddMediaFileBatch(files []*types.MediaFile) ([]int64, error) {
+	if len(files) == 0 {
+		return []int64{}, nil
+	}
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT OR IGNORE INTO media_files (
+			file_path, file_name, file_size_bytes,
+			codec, resolution_width, resolution_height,
+			duration_seconds, bitrate_kbps, fps,
+			audio_streams_json, subtitle_streams_json,
+			should_transcode, transcoding_priority,
+			estimated_size_reduction_percent
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	ids := make([]int64, 0, len(files))
+	for _, file := range files {
+		audioJSON, _ := json.Marshal(file.AudioStreamsJSON)
+		subtitleJSON, _ := json.Marshal(file.SubtitleStreamsJSON)
+
+		result, err := stmt.Exec(
+			file.FilePath, file.FileName, file.FileSizeBytes,
+			file.Codec, file.ResolutionWidth, file.ResolutionHeight,
+			file.DurationSeconds, file.BitrateKbps, file.FPS,
+			string(audioJSON), string(subtitleJSON),
+			file.ShouldTranscode, file.TranscodingPriority,
+			file.EstimatedSizeReductionPercent,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert file %s: %w", file.FilePath, err)
+		}
+
+		id, _ := result.LastInsertId()
+		ids = append(ids, id)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return ids, nil
+}
+
+// UpdateMediaFileBatch updates multiple media files in a single transaction
+func (db *DB) UpdateMediaFileBatch(updates map[int64]*types.MediaFile) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		UPDATE media_files SET
+			file_name = ?, file_size_bytes = ?,
+			codec = ?, resolution_width = ?, resolution_height = ?,
+			duration_seconds = ?, bitrate_kbps = ?, fps = ?,
+			audio_streams_json = ?, subtitle_streams_json = ?,
+			should_transcode = ?, transcoding_priority = ?,
+			estimated_size_reduction_percent = ?,
+			source_checksum = ?, source_checksum_algo = ?, source_checksum_at = ?,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for id, file := range updates {
+		audioJSON, _ := json.Marshal(file.AudioStreamsJSON)
+		subtitleJSON, _ := json.Marshal(file.SubtitleStreamsJSON)
+
+		_, err := stmt.Exec(
+			file.FileName, file.FileSizeBytes,
+			file.Codec, file.ResolutionWidth, file.ResolutionHeight,
+			file.DurationSeconds, file.BitrateKbps, file.FPS,
+			string(audioJSON), string(subtitleJSON),
+			file.ShouldTranscode, file.TranscodingPriority,
+			file.EstimatedSizeReductionPercent,
+			file.SourceChecksum, file.SourceChecksumAlgo, file.SourceChecksumAt,
+			id,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to update file %s: %w", file.FilePath, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
 // GetMediaFileByPath retrieves a media file by its path
 func (db *DB) GetMediaFileByPath(path string) (*types.MediaFile, error) {
 	row := db.conn.QueryRow("SELECT * FROM media_files WHERE file_path = ?", path)
@@ -196,6 +306,65 @@ func (db *DB) GetMediaFileByPath(path string) (*types.MediaFile, error) {
 		return nil, nil // File not found - this is not an error
 	}
 	return file, err
+}
+
+// GetFilesNeedingChecksums retrieves files that don't have checksums yet
+func (db *DB) GetFilesNeedingChecksums(limit int) ([]*types.MediaFile, error) {
+	rows, err := db.conn.Query(`
+		SELECT * FROM media_files
+		WHERE source_checksum IS NULL OR source_checksum = ''
+		ORDER BY file_size_bytes ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []*types.MediaFile
+	for rows.Next() {
+		file := &types.MediaFile{}
+		var audioJSON, subtitleJSON string
+		var sourceChecksum, sourceChecksumAlgo sql.NullString
+		var sourceChecksumAt sql.NullTime
+
+		err := rows.Scan(
+			&file.ID, &file.FilePath, &file.FileName, &file.FileSizeBytes,
+			&file.Codec, &file.ResolutionWidth, &file.ResolutionHeight,
+			&file.DurationSeconds, &file.BitrateKbps, &file.FPS,
+			&audioJSON, &subtitleJSON,
+			&file.ShouldTranscode, &file.TranscodingPriority,
+			&file.EstimatedSizeReductionPercent,
+			&file.DiscoveredAt, &file.UpdatedAt,
+			&sourceChecksum, &sourceChecksumAlgo, &sourceChecksumAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Parse JSON fields
+		if audioJSON != "" {
+			json.Unmarshal([]byte(audioJSON), &file.AudioStreamsJSON)
+		}
+		if subtitleJSON != "" {
+			json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreamsJSON)
+		}
+
+		// Handle nullable checksum fields
+		if sourceChecksum.Valid {
+			file.SourceChecksum = sourceChecksum.String
+		}
+		if sourceChecksumAlgo.Valid {
+			file.SourceChecksumAlgo = sourceChecksumAlgo.String
+		}
+		if sourceChecksumAt.Valid {
+			file.SourceChecksumAt = &sourceChecksumAt.Time
+		}
+
+		files = append(files, file)
+	}
+
+	return files, rows.Err()
 }
 
 // CreateJob creates a new transcode job from a media file

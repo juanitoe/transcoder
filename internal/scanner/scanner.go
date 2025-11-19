@@ -32,6 +32,21 @@ type Scanner struct {
 	checksumAlgo  checksum.Algorithm // Detected remote checksum algorithm
 }
 
+// workItem represents a file that needs metadata extraction
+type workItem struct {
+	path         string
+	size         int64
+	existingFile *types.MediaFile // nil for new files
+}
+
+// workResult represents the result of processing a work item
+type workResult struct {
+	metadata  *types.MediaFile
+	isNew     bool     // true if file is new, false if update
+	existingID int64   // ID of existing file if update
+	err       error
+}
+
 // New creates a new Scanner instance
 func New(cfg *config.Config, db *database.DB) (*Scanner, error) {
 	// Open log file
@@ -272,17 +287,8 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 
 			// Fast path: existing file with matching size - skip ffprobe entirely
 			if existing != nil && existing.FileSizeBytes == fileSize {
-				if existing.SourceChecksum == "" {
-					// File unchanged but missing checksum - backfill it
-					s.logDebug("Backfilling checksum for %s", fullPath)
-					remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
-					if err != nil {
-						s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
-					} else {
-						s.db.UpdateMediaFileChecksum(existing.ID, remoteChecksum, string(s.checksumAlgo))
-					}
-				}
 				// Size matches - file unchanged, skip
+				// Note: Checksum backfilling moved to separate background phase for performance
 				if progressCb != nil {
 					progressCb(*progress)
 				}
@@ -317,18 +323,9 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 				}
 				progress.FilesAdded++
 			} else {
-				// Existing file with changed size - update with new checksum
+				// Existing file with changed size - update metadata
+				// Note: Checksum calculation moved to separate background phase for performance
 				s.logDebug("File size changed for %s: %d -> %d", fullPath, existing.FileSizeBytes, fileSize)
-
-				remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
-				if err != nil {
-					s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
-				} else {
-					metadata.SourceChecksum = remoteChecksum
-					metadata.SourceChecksumAlgo = string(s.checksumAlgo)
-					now := time.Now()
-					metadata.SourceChecksumAt = &now
-				}
 
 				metadata.ID = existing.ID
 				if err := s.db.UpdateMediaFile(existing.ID, metadata); err != nil {
@@ -349,6 +346,62 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 		}
 	}
 
+	return nil
+}
+
+// BackfillChecksums calculates and updates checksums for files that are missing them
+// This should be run as a background task after the main scan completes
+func (s *Scanner) BackfillChecksums(ctx context.Context, progressCb ProgressCallback) error {
+	if s.sftpClient == nil {
+		return fmt.Errorf("not connected - call Connect() first")
+	}
+
+	// Get all files without checksums
+	filesNeedingChecksums, err := s.db.GetFilesNeedingChecksums(100) // Process in batches
+	if err != nil {
+		return fmt.Errorf("failed to query files needing checksums: %w", err)
+	}
+
+	s.logDebug("Backfilling checksums for %d files", len(filesNeedingChecksums))
+
+	var progress ScanProgress
+	for _, file := range filesNeedingChecksums {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		progress.CurrentPath = file.FilePath
+		progress.FilesScanned++
+		s.progress = progress
+
+		// Calculate checksum
+		checksum, err := s.CalculateRemoteChecksum(file.FilePath)
+		if err != nil {
+			s.logDebug("Warning: failed to calculate checksum for %s: %v", file.FilePath, err)
+			progress.ErrorCount++
+			progress.LastError = err
+		} else {
+			// Update database
+			if err := s.db.UpdateMediaFileChecksum(file.ID, checksum, string(s.checksumAlgo)); err != nil {
+				s.logDebug("Warning: failed to update checksum for %s: %v", file.FilePath, err)
+				progress.ErrorCount++
+				progress.LastError = err
+			} else {
+				progress.FilesUpdated++
+				s.logDebug("Backfilled checksum for %s", file.FilePath)
+			}
+		}
+
+		if progressCb != nil {
+			progressCb(progress)
+		}
+	}
+
+	s.logDebug("Checksum backfill complete - %d files updated, %d errors",
+		progress.FilesUpdated, progress.ErrorCount)
 	return nil
 }
 
