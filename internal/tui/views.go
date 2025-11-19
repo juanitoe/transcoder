@@ -310,6 +310,10 @@ func (m Model) renderJobs() string {
 
 				if isSelected {
 					panelContent += enhancedSelectedStyle.Render("► "+jobText) + "\n"
+					// Show action dropdown after selected job if active
+					if m.showJobActionDropdown {
+						panelContent += m.renderJobActionsDropdown(job)
+					}
 				} else {
 					panelContent += jobText + "\n"
 				}
@@ -356,6 +360,10 @@ func (m Model) renderJobs() string {
 
 				if isSelected {
 					panelContent += enhancedSelectedStyle.Render("► "+jobText) + "\n"
+					// Show action dropdown after selected job if active
+					if m.showJobActionDropdown {
+						panelContent += m.renderJobActionsDropdown(job)
+					}
 				} else {
 					panelContent += jobText + "\n"
 				}
@@ -372,9 +380,14 @@ func (m Model) renderJobs() string {
 	jobsBox := boxStyle.Copy().Width(boxWidth).Render(panelSwitcher + "\n\n" + panelContent)
 
 	// Add help text
-	helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [d] delete  •  [K] kill  •  [p] pause  •  [c] cancel  •  [enter] resume")
-
-	return jobsBox + helpText
+	if m.showJobActionDropdown {
+		// Help text shown in dropdown
+		helpText := ""
+		return jobsBox + helpText
+	} else {
+		helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [Enter] Actions menu")
+		return jobsBox + helpText
+	}
 }
 
 func (m Model) renderHistory() string {
@@ -608,6 +621,48 @@ func (m Model) renderPresetDropdown() string {
 		} else {
 			line = itemStyle.Render(fmt.Sprintf("   %-10s ", preset))
 			line += " " + descStyle.Render(descriptions[i])
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
+}
+
+// renderJobActionsDropdown renders a visual dropdown menu for job actions
+func (m Model) renderJobActionsDropdown(job *types.TranscodeJob) string {
+	actions := m.getJobActions(job)
+
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	for i, action := range actions {
+		var line string
+		if i == m.jobActionDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-16s ", action.label))
+			line += " " + descStyle.Render(action.description)
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %-16s ", action.label))
+			line += " " + descStyle.Render(action.description)
 		}
 		dropdown += line + "\n"
 	}

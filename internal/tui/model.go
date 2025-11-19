@@ -126,6 +126,10 @@ type Model struct {
 	showPresetDropdown  bool   // Show preset dropdown menu
 	presetDropdownIndex int    // Currently highlighted preset in dropdown
 
+	// Job actions
+	showJobActionDropdown  bool // Show job action dropdown menu
+	jobActionDropdownIndex int  // Currently highlighted action in dropdown
+
 	// Logs
 	logs            []string
 	maxLogs         int
@@ -629,6 +633,11 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // handleJobListKeys handles keys in job list views
 func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle job action dropdown navigation
+	if m.showJobActionDropdown {
+		return m.handleJobActionDropdown(msg)
+	}
+
 	// Get current job list based on panel
 	var jobs []*types.TranscodeJob
 	var scrollOffset *int
@@ -690,13 +699,11 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter":
-		// Resume paused job
+		// Show action dropdown for selected job
 		if m.selectedJob < len(jobs) {
-			job := jobs[m.selectedJob]
-			if job.Status == types.StatusPaused {
-				m.db.ResumeJob(job.ID)
-				m.statusMsg = fmt.Sprintf("Resuming job #%d", job.ID)
-			}
+			m.showJobActionDropdown = true
+			m.jobActionDropdownIndex = 0
+			return m, nil
 		}
 
 	case "a":
@@ -754,6 +761,174 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// handleJobActionDropdown handles keys when the job action dropdown is shown
+func (m Model) handleJobActionDropdown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Get current job
+	var jobs []*types.TranscodeJob
+	if m.jobsPanel == 0 {
+		jobs = m.activeJobs
+	} else {
+		jobs = m.queuedJobs
+	}
+
+	if m.selectedJob >= len(jobs) {
+		m.showJobActionDropdown = false
+		return m, nil
+	}
+
+	job := jobs[m.selectedJob]
+	actions := m.getJobActions(job)
+
+	switch msg.String() {
+	case "up", "k":
+		if m.jobActionDropdownIndex > 0 {
+			m.jobActionDropdownIndex--
+		}
+		return m, nil
+	case "down", "j":
+		if m.jobActionDropdownIndex < len(actions)-1 {
+			m.jobActionDropdownIndex++
+		}
+		return m, nil
+	case "enter":
+		// Execute selected action
+		if m.jobActionDropdownIndex < len(actions) {
+			m.executeJobAction(job, actions[m.jobActionDropdownIndex].action)
+		}
+		m.showJobActionDropdown = false
+		return m, nil
+	case "esc":
+		// Cancel dropdown
+		m.showJobActionDropdown = false
+		return m, nil
+	}
+	return m, nil
+}
+
+// JobAction represents an available action for a job
+type JobAction struct {
+	action      string
+	label       string
+	description string
+}
+
+// getJobActions returns available actions for a job based on its status
+func (m Model) getJobActions(job *types.TranscodeJob) []JobAction {
+	var actions []JobAction
+
+	switch job.Status {
+	case types.StatusQueued:
+		actions = append(actions, JobAction{
+			action:      "delete",
+			label:       "Delete",
+			description: "Remove from queue",
+		})
+		actions = append(actions, JobAction{
+			action:      "priority",
+			label:       "Adjust Priority",
+			description: "Change queue priority",
+		})
+
+	case types.StatusDownloading, types.StatusTranscoding, types.StatusUploading:
+		actions = append(actions, JobAction{
+			action:      "pause",
+			label:       "Pause",
+			description: "Pause current processing",
+		})
+		actions = append(actions, JobAction{
+			action:      "cancel",
+			label:       "Cancel",
+			description: "Cancel and requeue",
+		})
+		actions = append(actions, JobAction{
+			action:      "kill",
+			label:       "Kill (Force)",
+			description: "Force terminate immediately",
+		})
+
+	case types.StatusPaused:
+		actions = append(actions, JobAction{
+			action:      "resume",
+			label:       "Resume",
+			description: "Continue processing",
+		})
+		actions = append(actions, JobAction{
+			action:      "cancel",
+			label:       "Cancel",
+			description: "Cancel and requeue",
+		})
+		actions = append(actions, JobAction{
+			action:      "kill",
+			label:       "Kill (Force)",
+			description: "Force terminate immediately",
+		})
+
+	case types.StatusCompleted, types.StatusFailed, types.StatusCanceled:
+		actions = append(actions, JobAction{
+			action:      "delete",
+			label:       "Delete",
+			description: "Remove from list",
+		})
+		if job.Status == types.StatusFailed {
+			actions = append(actions, JobAction{
+				action:      "retry",
+				label:       "Retry",
+				description: "Requeue for processing",
+			})
+		}
+	}
+
+	return actions
+}
+
+// executeJobAction executes the selected action on a job
+func (m *Model) executeJobAction(job *types.TranscodeJob, action string) {
+	switch action {
+	case "pause":
+		m.workerPool.PauseJob(job.ID)
+		m.statusMsg = fmt.Sprintf("Pausing job #%d", job.ID)
+
+	case "resume":
+		m.db.ResumeJob(job.ID)
+		m.statusMsg = fmt.Sprintf("Resuming job #%d", job.ID)
+
+	case "cancel":
+		m.workerPool.CancelJob(job.ID)
+		m.statusMsg = fmt.Sprintf("Canceling job #%d", job.ID)
+
+	case "kill":
+		if err := m.db.KillJob(job.ID); err != nil {
+			m.errorMsg = fmt.Sprintf("Failed to kill job: %v", err)
+		} else {
+			m.statusMsg = fmt.Sprintf("Killed job #%d", job.ID)
+			m.addLog("INFO", fmt.Sprintf("Force-killed job #%d (%s)", job.ID, job.FileName))
+			m.refreshData()
+		}
+
+	case "delete":
+		if err := m.db.DeleteJob(job.ID); err != nil {
+			m.errorMsg = fmt.Sprintf("Failed to delete job: %v", err)
+		} else {
+			m.statusMsg = fmt.Sprintf("Deleted job #%d", job.ID)
+			m.addLog("INFO", fmt.Sprintf("Deleted job #%d (%s)", job.ID, job.FileName))
+			m.refreshData()
+		}
+
+	case "retry":
+		if err := m.db.UpdateJobStatus(job.ID, types.StatusQueued, "", 0); err != nil {
+			m.errorMsg = fmt.Sprintf("Failed to requeue job: %v", err)
+		} else {
+			m.statusMsg = fmt.Sprintf("Requeued job #%d", job.ID)
+			m.addLog("INFO", fmt.Sprintf("Requeued job #%d for retry", job.ID))
+			m.refreshData()
+		}
+
+	case "priority":
+		// TODO: Implement priority adjustment UI
+		m.statusMsg = "Priority adjustment not yet implemented"
+	}
 }
 
 // applySettingValue validates and applies the textinput value to the config
