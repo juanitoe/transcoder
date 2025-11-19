@@ -256,9 +256,40 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 			// Process video file
 			progress.FilesScanned++
 			progress.BytesScanned += entry.Size()
-			s.logDebug("Found video file: %s (%d bytes)", fullPath, entry.Size())
+			fileSize := entry.Size()
+			s.logDebug("Found video file: %s (%d bytes)", fullPath, fileSize)
 
-			// Extract metadata
+			// Check if file exists in database FIRST (before expensive ffprobe)
+			existing, err := s.db.GetMediaFileByPath(fullPath)
+			if err != nil {
+				progress.ErrorCount++
+				progress.LastError = fmt.Errorf("database error for %s: %w", fullPath, err)
+				if progressCb != nil {
+					progressCb(*progress)
+				}
+				continue
+			}
+
+			// Fast path: existing file with matching size - skip ffprobe entirely
+			if existing != nil && existing.FileSizeBytes == fileSize {
+				if existing.SourceChecksum == "" {
+					// File unchanged but missing checksum - backfill it
+					s.logDebug("Backfilling checksum for %s", fullPath)
+					remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
+					if err != nil {
+						s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
+					} else {
+						s.db.UpdateMediaFileChecksum(existing.ID, remoteChecksum, string(s.checksumAlgo))
+					}
+				}
+				// Size matches - file unchanged, skip
+				if progressCb != nil {
+					progressCb(*progress)
+				}
+				continue
+			}
+
+			// Slow path: new file or size changed - need ffprobe
 			s.logDebug("Extracting metadata from: %s", fullPath)
 			metadata, err := s.extractMetadata(ctx, fullPath)
 			if err != nil {
@@ -273,31 +304,20 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 			s.logDebug("Metadata extracted successfully: codec=%s, resolution=%dx%d",
 				metadata.Codec, metadata.ResolutionWidth, metadata.ResolutionHeight)
 
-			// Check if file exists in database
-			existing, err := s.db.GetMediaFileByPath(fullPath)
+			// Calculate checksum for new/changed files
+			s.logDebug("Calculating checksum for %s", fullPath)
+			remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
 			if err != nil {
-				progress.ErrorCount++
-				progress.LastError = fmt.Errorf("database error for %s: %w", fullPath, err)
-				if progressCb != nil {
-					progressCb(*progress)
-				}
-				continue
+				s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
+			} else {
+				metadata.SourceChecksum = remoteChecksum
+				metadata.SourceChecksumAlgo = string(s.checksumAlgo)
+				now := time.Now()
+				metadata.SourceChecksumAt = &now
 			}
 
 			if existing == nil {
-				// New file - calculate checksum and add to database
-				s.logDebug("Calculating checksum for new file: %s", fullPath)
-				remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
-				if err != nil {
-					s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
-					// Continue without checksum - not fatal
-				} else {
-					metadata.SourceChecksum = remoteChecksum
-					metadata.SourceChecksumAlgo = string(s.checksumAlgo)
-					now := time.Now()
-					metadata.SourceChecksumAt = &now
-				}
-
+				// New file - add to database
 				_, err = s.db.AddMediaFile(metadata)
 				if err != nil {
 					progress.ErrorCount++
@@ -309,42 +329,18 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 				}
 				progress.FilesAdded++
 			} else {
-				// Existing file - check if changed by size (fast check)
-				if existing.FileSizeBytes != metadata.FileSizeBytes {
-					// Size changed - calculate new checksum and update
-					s.logDebug("File size changed for %s: %d -> %d", fullPath, existing.FileSizeBytes, metadata.FileSizeBytes)
-
-					remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
-					if err != nil {
-						s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
-					} else {
-						metadata.SourceChecksum = remoteChecksum
-						metadata.SourceChecksumAlgo = string(s.checksumAlgo)
-						now := time.Now()
-						metadata.SourceChecksumAt = &now
+				// Existing file with changed size - update
+				s.logDebug("File size changed for %s: %d -> %d", fullPath, existing.FileSizeBytes, fileSize)
+				metadata.ID = existing.ID
+				if err := s.db.UpdateMediaFile(existing.ID, metadata); err != nil {
+					progress.ErrorCount++
+					progress.LastError = fmt.Errorf("failed to update %s in database: %w", fullPath, err)
+					if progressCb != nil {
+						progressCb(*progress)
 					}
-
-					metadata.ID = existing.ID
-					if err := s.db.UpdateMediaFile(existing.ID, metadata); err != nil {
-						progress.ErrorCount++
-						progress.LastError = fmt.Errorf("failed to update %s in database: %w", fullPath, err)
-						if progressCb != nil {
-							progressCb(*progress)
-						}
-						continue
-					}
-					progress.FilesUpdated++
-				} else if existing.SourceChecksum == "" {
-					// File unchanged but missing checksum - backfill it
-					s.logDebug("Backfilling checksum for %s", fullPath)
-					remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
-					if err != nil {
-						s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
-					} else {
-						s.db.UpdateMediaFileChecksum(existing.ID, remoteChecksum, string(s.checksumAlgo))
-					}
+					continue
 				}
-				// else: size matches and we have checksum - file unchanged, skip
+				progress.FilesUpdated++
 			}
 
 			// Update progress
