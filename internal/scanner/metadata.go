@@ -36,6 +36,7 @@ type FFprobeStream struct {
 	Width              int               `json:"width"`
 	Height             int               `json:"height"`
 	AvgFrameRate       string            `json:"avg_frame_rate"`
+	RFrameRate         string            `json:"r_frame_rate"`
 	BitRate            string            `json:"bit_rate"`
 	Duration           string            `json:"duration"`
 	Tags               map[string]string `json:"tags"`
@@ -116,10 +117,17 @@ func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath strin
 				mediaFile.ResolutionWidth = stream.Width
 				mediaFile.ResolutionHeight = stream.Height
 
-				// Parse FPS
-				if stream.AvgFrameRate != "" {
+				// Parse FPS - try avg_frame_rate first, fall back to r_frame_rate
+				if stream.AvgFrameRate != "" && stream.AvgFrameRate != "0/0" {
 					fps, err := parseFPS(stream.AvgFrameRate)
-					if err == nil {
+					if err == nil && fps > 0 {
+						mediaFile.FPS = fps
+					}
+				}
+				// Fallback to r_frame_rate if avg_frame_rate didn't work
+				if mediaFile.FPS == 0 && stream.RFrameRate != "" && stream.RFrameRate != "0/0" {
+					fps, err := parseFPS(stream.RFrameRate)
+					if err == nil && fps > 0 {
 						mediaFile.FPS = fps
 					}
 				}

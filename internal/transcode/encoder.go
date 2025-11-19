@@ -41,7 +41,8 @@ type TranscodeProgress struct {
 type ProgressCallback func(progress TranscodeProgress)
 
 // Transcode transcodes a video file to HEVC
-func (e *Encoder) Transcode(ctx context.Context, inputPath, outputPath string, totalFrames int64, progressCb ProgressCallback) error {
+// durationUs is the total duration in microseconds for progress calculation
+func (e *Encoder) Transcode(ctx context.Context, inputPath, outputPath string, durationUs int64, progressCb ProgressCallback) error {
 	// Ensure output directory exists
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -87,15 +88,16 @@ func (e *Encoder) Transcode(ctx context.Context, inputPath, outputPath string, t
 					totalSize, _ := strconv.ParseInt(progressData["total_size"], 10, 64)
 					timeStr := progressData["out_time"]
 					bitrateStr := progressData["bitrate"]
+					outTimeUs, _ := strconv.ParseInt(progressData["out_time_us"], 10, 64)
 
 					// Parse speed (remove 'x' suffix)
 					speedStr := strings.TrimSuffix(progressData["speed"], "x")
 					speed, _ := strconv.ParseFloat(speedStr, 64)
 
-					// Calculate progress percentage
+					// Calculate progress percentage using time (more reliable than frames)
 					var progressPercent float64
-					if totalFrames > 0 {
-						progressPercent = (float64(frame) / float64(totalFrames)) * 100
+					if durationUs > 0 && outTimeUs > 0 {
+						progressPercent = (float64(outTimeUs) / float64(durationUs)) * 100
 						if progressPercent > 100 {
 							progressPercent = 100
 						}

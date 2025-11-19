@@ -310,17 +310,14 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	}()
 	defer close(fileSizeDone)
 
-	// Get total frames for progress calculation
-	var totalFrames int64 = 1
+	// Get duration for progress calculation (in microseconds)
+	var durationUs int64 = 1
 	mediaFile, err := w.db.GetMediaFileByPath(job.FilePath)
-	if err == nil && mediaFile != nil {
-		totalFrames = int64(mediaFile.DurationSeconds * mediaFile.FPS)
-		if totalFrames == 0 {
-			totalFrames = 1
-		}
+	if err == nil && mediaFile != nil && mediaFile.DurationSeconds > 0 {
+		durationUs = int64(mediaFile.DurationSeconds * 1000000)
 	}
 
-	err = w.encoder.Transcode(jobCtx, localInputPath, localOutputPath, totalFrames, func(progress TranscodeProgress) {
+	err = w.encoder.Transcode(jobCtx, localInputPath, localOutputPath, durationUs, func(progress TranscodeProgress) {
 		w.updateProgress(job.ID, types.StageTranscode, progress.Progress,
 			fmt.Sprintf("Transcoding: frame=%d fps=%.1f speed=%.2fx", progress.Frame, progress.FPS, progress.Speed), 0, 0)
 	})
