@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -64,44 +63,59 @@ func (e *Encoder) Transcode(ctx context.Context, inputPath, outputPath string, t
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Parse progress from stderr
+	// Parse progress from stderr (-progress pipe:2 output format)
+	// Format is key=value pairs, with each block ending in progress=continue or progress=end
 	scanner := bufio.NewScanner(stderrPipe)
-	progressRegex := regexp.MustCompile(`frame=\s*(\d+)\s+fps=\s*([\d.]+)\s+.*size=\s*(\d+)kB\s+time=(\S+)\s+bitrate=\s*(\S+)\s+speed=\s*([\d.]+)x`)
 
 	go func() {
+		progressData := make(map[string]string)
+
 		for scanner.Scan() {
 			line := scanner.Text()
 
-			// Parse progress line
-			matches := progressRegex.FindStringSubmatch(line)
-			if len(matches) >= 7 {
-				frame, _ := strconv.ParseInt(matches[1], 10, 64)
-				fps, _ := strconv.ParseFloat(matches[2], 64)
-				size, _ := strconv.ParseInt(matches[3], 10, 64)
-				timeStr := matches[4]
-				bitrateStr := matches[5]
-				speed, _ := strconv.ParseFloat(matches[6], 64)
+			// Parse key=value pairs
+			if idx := strings.Index(line, "="); idx > 0 {
+				key := line[:idx]
+				value := line[idx+1:]
+				progressData[key] = value
 
-				// Calculate progress percentage
-				var progressPercent float64
-				if totalFrames > 0 {
-					progressPercent = (float64(frame) / float64(totalFrames)) * 100
-					if progressPercent > 100 {
-						progressPercent = 100
+				// When we receive progress=continue or progress=end, emit update
+				if key == "progress" {
+					// Parse accumulated values
+					frame, _ := strconv.ParseInt(progressData["frame"], 10, 64)
+					fps, _ := strconv.ParseFloat(progressData["fps"], 64)
+					totalSize, _ := strconv.ParseInt(progressData["total_size"], 10, 64)
+					timeStr := progressData["out_time"]
+					bitrateStr := progressData["bitrate"]
+
+					// Parse speed (remove 'x' suffix)
+					speedStr := strings.TrimSuffix(progressData["speed"], "x")
+					speed, _ := strconv.ParseFloat(speedStr, 64)
+
+					// Calculate progress percentage
+					var progressPercent float64
+					if totalFrames > 0 {
+						progressPercent = (float64(frame) / float64(totalFrames)) * 100
+						if progressPercent > 100 {
+							progressPercent = 100
+						}
 					}
-				}
 
-				// Report progress
-				if progressCb != nil {
-					progressCb(TranscodeProgress{
-						Frame:     frame,
-						FPS:       fps,
-						Bitrate:   bitrateStr,
-						TotalSize: size * 1024, // Convert KB to bytes
-						Time:      timeStr,
-						Speed:     speed,
-						Progress:  progressPercent,
-					})
+					// Report progress
+					if progressCb != nil {
+						progressCb(TranscodeProgress{
+							Frame:     frame,
+							FPS:       fps,
+							Bitrate:   bitrateStr,
+							TotalSize: totalSize,
+							Time:      timeStr,
+							Speed:     speed,
+							Progress:  progressPercent,
+						})
+					}
+
+					// Reset for next progress block
+					progressData = make(map[string]string)
 				}
 			}
 		}
