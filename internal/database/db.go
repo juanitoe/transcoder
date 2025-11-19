@@ -797,7 +797,10 @@ func (db *DB) GetState(key string) (string, error) {
 func (db *DB) scanMediaFile(row *sql.Row) (*types.MediaFile, error) {
 	file := &types.MediaFile{}
 	var audioJSON, subtitleJSON string
+	var sourceChecksum, sourceChecksumAlgo sql.NullString
+	var sourceChecksumAt sql.NullTime
 
+	// Column order matches schema - checksum columns are at the END (added by migration)
 	err := row.Scan(
 		&file.ID, &file.FilePath, &file.FileName, &file.FileSizeBytes,
 		&file.Codec, &file.ResolutionWidth, &file.ResolutionHeight,
@@ -806,6 +809,7 @@ func (db *DB) scanMediaFile(row *sql.Row) (*types.MediaFile, error) {
 		&file.ShouldTranscode, &file.TranscodingPriority,
 		&file.EstimatedSizeReductionPercent,
 		&file.DiscoveredAt, &file.UpdatedAt,
+		&sourceChecksum, &sourceChecksumAlgo, &sourceChecksumAt,
 	)
 
 	if err != nil {
@@ -814,6 +818,17 @@ func (db *DB) scanMediaFile(row *sql.Row) (*types.MediaFile, error) {
 
 	json.Unmarshal([]byte(audioJSON), &file.AudioStreamsJSON)
 	json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreamsJSON)
+
+	// Handle nullable checksum fields
+	if sourceChecksum.Valid {
+		file.SourceChecksum = sourceChecksum.String
+	}
+	if sourceChecksumAlgo.Valid {
+		file.SourceChecksumAlgo = sourceChecksumAlgo.String
+	}
+	if sourceChecksumAt.Valid {
+		file.SourceChecksumAt = &sourceChecksumAt.Time
+	}
 
 	return file, nil
 }

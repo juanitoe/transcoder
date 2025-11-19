@@ -25,14 +25,14 @@ CREATE TABLE IF NOT EXISTS media_files (
     transcoding_priority INTEGER DEFAULT 0,
     estimated_size_reduction_percent INTEGER,
 
-    -- Checksum for integrity verification
-    source_checksum TEXT,
-    source_checksum_algo TEXT,
-    source_checksum_at TIMESTAMP,
-
     -- Timestamps
     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Checksum for integrity verification (at end to match migration order)
+    source_checksum TEXT,
+    source_checksum_algo TEXT,
+    source_checksum_at TIMESTAMP
 );
 
 -- Transcode jobs (active, queued, completed)
@@ -59,12 +59,6 @@ CREATE TABLE IF NOT EXISTS transcode_jobs (
     -- Verification
     verification_passed BOOLEAN DEFAULT 0,
 
-    -- Checksum verification
-    local_input_checksum TEXT,
-    local_output_checksum TEXT,
-    uploaded_checksum TEXT,
-    checksum_verified BOOLEAN DEFAULT 0,
-
     -- Error handling
     error_message TEXT,
     retry_count INTEGER DEFAULT 0,
@@ -76,6 +70,12 @@ CREATE TABLE IF NOT EXISTS transcode_jobs (
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Checksum verification (at end to match migration order)
+    local_input_checksum TEXT,
+    local_output_checksum TEXT,
+    uploaded_checksum TEXT,
+    checksum_verified BOOLEAN DEFAULT 0,
 
     FOREIGN KEY (media_file_id) REFERENCES media_files(id)
 );
