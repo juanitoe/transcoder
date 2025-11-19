@@ -571,31 +571,9 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Handle clicks on individual jobs in Jobs view
-	// Jobs start at row 8 (header=0, status=1, empty=2, box_border=3, panel_tabs=4, empty=5, total=6, empty=7, jobs=8+)
-	// Each job takes 4 lines (with enhanced selected style wrapping)
-	if m.viewMode == ViewJobs && msg.Y >= 8 {
-		jobsStartY := 8
-		clickedY := msg.Y - jobsStartY
-
-		// Each job takes 4 lines (job line + status line + progress line + empty line)
-		jobIndex := clickedY / 4
-
-		// Adjust for scroll offset
-		if m.jobsPanel == 0 {
-			jobIndex += m.activeJobsScrollOffset
-			if jobIndex >= 0 && jobIndex < len(m.activeJobs) {
-				m.selectedJob = jobIndex
-				return m, nil
-			}
-		} else {
-			jobIndex += m.queuedJobsScrollOffset
-			if jobIndex >= 0 && jobIndex < len(m.queuedJobs) {
-				m.selectedJob = jobIndex
-				return m, nil
-			}
-		}
-	}
+	// TODO: Click-to-select jobs disabled due to dynamic layout complexity
+	// The job positions vary based on selection state, dropdown visibility, and scroll indicators
+	// Use keyboard navigation (↑↓) or mouse wheel instead
 
 	// Handle clicks on Settings fields
 	// Settings layout: header(0), status(1), empty(2), box_border(3), title(4), empty(5)
