@@ -46,6 +46,117 @@ transcoder-go/
 
 ---
 
+## Startup Workflow
+
+### Startup Sequence
+
+```mermaid
+flowchart TD
+    A[Start Application] --> B[Load config.yaml]
+    B --> C{Config exists?}
+    C -->|No| D[Use defaults]
+    C -->|Yes| E[Parse config]
+    D --> F[Open/Create SQLite DB]
+    E --> F
+
+    F --> G[Run schema migrations]
+    G --> H[Recover orphaned jobs]
+
+    H --> I{Orphaned jobs found?}
+    I -->|Yes| J[Clear worker_id<br/>Keep status & progress]
+    I -->|No| K[Create scanner]
+    J --> K
+
+    K --> L[Create worker pool]
+    L --> M[Start N workers]
+    M --> N[Launch TUI]
+
+    N --> O[Workers begin claiming jobs]
+```
+
+### Scenarios
+
+#### 1. Fresh Start (No Database)
+- Creates new SQLite database at configured path
+- Runs initial schema creation
+- No files in `media_files` table
+- No jobs to process
+- **User action needed**: Press `s` to scan remote library
+
+#### 2. Existing Database, No Active Jobs
+- Opens existing database
+- Runs migrations if schema version is outdated
+- Workers start but find no queued jobs
+- Workers poll every 2 seconds for new jobs
+- **User action needed**: Press `a` to queue jobs for transcoding
+
+#### 3. Existing Database with Queued Jobs
+- Workers immediately start claiming queued jobs
+- Jobs processed in priority order (highest first)
+- Multiple workers can process different jobs concurrently
+
+#### 4. Recovery After Crash (Orphaned Jobs)
+Jobs in active states (`downloading`, `transcoding`, `uploading`) without a worker are recovered:
+
+| Previous Status | Recovery Action |
+|----------------|-----------------|
+| `downloading` | Reset progress to 0, will re-download |
+| `transcoding` | Keep progress, may resume from existing files |
+| `uploading` | Keep progress, may resume from transcoded file |
+
+### Worker Job Processing
+
+When a worker claims a job, it checks for existing work:
+
+```mermaid
+flowchart TD
+    A[Worker Claims Job] --> B[Check work directory<br/>~/.transcoder/work/job-ID/]
+
+    B --> C{Downloaded file exists?}
+    C -->|No| D[Download from remote]
+    C -->|Yes| E[Skip download<br/>Calculate checksum]
+
+    D --> F{Transcoded file exists?}
+    E --> F
+
+    F -->|No| G[Run FFmpeg transcode]
+    F -->|Yes| H[Verify duration matches]
+
+    H --> I{Duration OK?}
+    I -->|No| J[Delete & re-transcode]
+    I -->|Yes| K[Skip transcode<br/>Calculate checksum]
+
+    G --> L[Validate & Upload]
+    J --> G
+    K --> L
+
+    L --> M[Complete job]
+    M --> N[Clean up work directory]
+```
+
+### Work Directory Structure
+
+```
+~/.transcoder/work/
+├── job-123/
+│   ├── Movie.Name.2024.mkv           # Downloaded input
+│   └── transcoded_Movie.Name.2024.mkv # Transcoded output
+├── job-124/
+│   └── ...
+```
+
+Files in work directories persist across restarts, enabling job resume.
+
+### Database States on Startup
+
+| Table | Fresh Start | After Scan | After Queue | After Transcode |
+|-------|-------------|------------|-------------|-----------------|
+| `media_files` | Empty | Populated with metadata | Unchanged | `should_transcode=0` for completed |
+| `transcode_jobs` | Empty | Empty | Jobs with `status=queued` | Jobs with `status=completed` |
+| `system_state` | `schema_version=2` | `last_scan_time` updated | Unchanged | Unchanged |
+
+---
+
 ## Scanning Flow
 
 ```mermaid
