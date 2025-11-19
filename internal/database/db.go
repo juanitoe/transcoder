@@ -824,9 +824,10 @@ func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 	var transcodeStartedAt, transcodeCompletedAt, lastRetryAt sql.NullTime
 	var transcodedFileSizeBytes, encodingTimeSeconds sql.NullInt64
 	var encodingFPS sql.NullFloat64
-	var verificationPassed sql.NullBool
-	var errorMessage sql.NullString
+	var verificationPassed, checksumVerified sql.NullBool
+	var errorMessage, localInputChecksum, localOutputChecksum, uploadedChecksum sql.NullString
 
+	// Column order matches schema - checksum columns are at the END (added by migration)
 	err := row.Scan(
 		&job.ID, &job.MediaFileID, &job.FilePath, &job.FileName, &job.FileSizeBytes,
 		&status, &stage, &job.Progress, &job.WorkerID,
@@ -834,6 +835,7 @@ func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 		&transcodedFileSizeBytes, &encodingTimeSeconds, &encodingFPS,
 		&verificationPassed, &errorMessage, &job.RetryCount, &lastRetryAt,
 		&job.Priority, &job.CreatedAt, &job.UpdatedAt,
+		&localInputChecksum, &localOutputChecksum, &uploadedChecksum, &checksumVerified,
 	)
 
 	if err != nil {
@@ -867,6 +869,19 @@ func (db *DB) scanTranscodeJob(row *sql.Row) (*types.TranscodeJob, error) {
 	}
 	if lastRetryAt.Valid {
 		job.LastRetryAt = &lastRetryAt.Time
+	}
+	// Handle checksum fields
+	if localInputChecksum.Valid {
+		job.LocalInputChecksum = localInputChecksum.String
+	}
+	if localOutputChecksum.Valid {
+		job.LocalOutputChecksum = localOutputChecksum.String
+	}
+	if uploadedChecksum.Valid {
+		job.UploadedChecksum = uploadedChecksum.String
+	}
+	if checksumVerified.Valid {
+		job.ChecksumVerified = checksumVerified.Bool
 	}
 
 	return job, nil
@@ -878,9 +893,10 @@ func (db *DB) scanTranscodeJobRow(rows *sql.Rows) (*types.TranscodeJob, error) {
 	var transcodeStartedAt, transcodeCompletedAt, lastRetryAt sql.NullTime
 	var transcodedFileSizeBytes, encodingTimeSeconds sql.NullInt64
 	var encodingFPS sql.NullFloat64
-	var verificationPassed sql.NullBool
-	var errorMessage sql.NullString
+	var verificationPassed, checksumVerified sql.NullBool
+	var errorMessage, localInputChecksum, localOutputChecksum, uploadedChecksum sql.NullString
 
+	// Column order matches schema - checksum columns are at the END (added by migration)
 	err := rows.Scan(
 		&job.ID, &job.MediaFileID, &job.FilePath, &job.FileName, &job.FileSizeBytes,
 		&status, &stage, &job.Progress, &job.WorkerID,
@@ -888,6 +904,7 @@ func (db *DB) scanTranscodeJobRow(rows *sql.Rows) (*types.TranscodeJob, error) {
 		&transcodedFileSizeBytes, &encodingTimeSeconds, &encodingFPS,
 		&verificationPassed, &errorMessage, &job.RetryCount, &lastRetryAt,
 		&job.Priority, &job.CreatedAt, &job.UpdatedAt,
+		&localInputChecksum, &localOutputChecksum, &uploadedChecksum, &checksumVerified,
 	)
 
 	if err != nil {
@@ -921,6 +938,19 @@ func (db *DB) scanTranscodeJobRow(rows *sql.Rows) (*types.TranscodeJob, error) {
 	}
 	if lastRetryAt.Valid {
 		job.LastRetryAt = &lastRetryAt.Time
+	}
+	// Handle checksum fields
+	if localInputChecksum.Valid {
+		job.LocalInputChecksum = localInputChecksum.String
+	}
+	if localOutputChecksum.Valid {
+		job.LocalOutputChecksum = localOutputChecksum.String
+	}
+	if uploadedChecksum.Valid {
+		job.UploadedChecksum = uploadedChecksum.String
+	}
+	if checksumVerified.Valid {
+		job.ChecksumVerified = checksumVerified.Bool
 	}
 
 	return job, nil
