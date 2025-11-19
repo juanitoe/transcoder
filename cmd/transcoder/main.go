@@ -90,7 +90,7 @@ func runTUI() error {
 	model := tui.New(cfg, db, scan, workerPool)
 
 	// Run TUI in a goroutine so we can handle signals
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Handle signals in a separate goroutine
 	go func() {

@@ -173,6 +173,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 
+	case tea.MouseMsg:
+		return m.handleMouseClick(msg)
+
 	case tickMsg:
 		// Periodic data refresh
 		m.refreshData()
@@ -341,6 +344,55 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSettingsKeys(msg)
 	case ViewLogs:
 		return m.handleLogsKeys(msg)
+	}
+
+	return m, nil
+}
+
+// handleMouseClick processes mouse clicks
+func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Only handle left clicks
+	if msg.Type != tea.MouseLeft {
+		return m, nil
+	}
+
+	// Calculate tab positions in the header
+	// Header format: "📹 Video Transcoder TUI" + spacing + "[1] Dashboard  [2] Jobs  [3] Settings  [4] Scanner  [5] Logs"
+
+	tabs := []string{
+		"[1] Dashboard",
+		"[2] Jobs",
+		"[3] Settings",
+		"[4] Scanner",
+		"[5] Logs",
+	}
+
+	// Calculate where tabs start on the screen
+	// Tabs are right-aligned
+	tabsWidth := 0
+	for i, tab := range tabs {
+		tabsWidth += len(tab)
+		if i < len(tabs)-1 {
+			tabsWidth += 2 // spacing between tabs
+		}
+	}
+
+	tabsStartX := m.width - tabsWidth
+
+	// Check if click was in header row (y == 0)
+	if msg.Y == 0 && msg.X >= tabsStartX {
+		// Calculate which tab was clicked
+		currentX := tabsStartX
+		for i, tab := range tabs {
+			tabEnd := currentX + len(tab)
+			if msg.X >= currentX && msg.X < tabEnd {
+				// Tab clicked!
+				m.viewMode = ViewMode(i)
+				m.refreshData()
+				return m, nil
+			}
+			currentX = tabEnd + 2 // Move to next tab (including spacing)
+		}
 	}
 
 	return m, nil
