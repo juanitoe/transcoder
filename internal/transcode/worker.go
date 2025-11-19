@@ -11,6 +11,7 @@ import (
 	"transcoder/internal/checksum"
 	"transcoder/internal/config"
 	"transcoder/internal/database"
+	"transcoder/internal/logging"
 	"transcoder/internal/scanner"
 	"transcoder/internal/types"
 )
@@ -97,6 +98,7 @@ func (wp *WorkerPool) ScaleWorkers(newCount int) {
 			wp.workers = append(wp.workers, worker)
 			go worker.Run(wp.ctx, wp.pauseRequests, wp.cancelRequests)
 		}
+		logging.Info("Scaled workers up: %d -> %d", currentCount, newCount)
 	} else if newCount < currentCount {
 		// Signal excess workers to stop after their current job completes
 		for i := newCount; i < currentCount; i++ {
@@ -104,6 +106,7 @@ func (wp *WorkerPool) ScaleWorkers(newCount int) {
 		}
 		// Keep them in the slice until they actually stop
 		// They'll exit after finishing their current job
+		logging.Info("Scaled workers down: %d -> %d (workers will stop after current job)", currentCount, newCount)
 	}
 
 	wp.workerCount = newCount
@@ -172,6 +175,7 @@ func (w *Worker) Run(ctx context.Context, pauseRequests, cancelRequests map[int6
 		job, err := w.db.ClaimNextJob(workerID)
 		if err != nil {
 			// Log error and retry
+			logging.Error("[%s] Failed to claim job: %v", workerID, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -181,6 +185,9 @@ func (w *Worker) Run(ctx context.Context, pauseRequests, cancelRequests map[int6
 			time.Sleep(2 * time.Second)
 			continue
 		}
+
+		// Log job claimed
+		logging.Info("[%s] Claimed job %d: %s", workerID, job.ID, job.FileName)
 
 		// Process the job (will complete fully before checking stopping flag again)
 		w.processJob(ctx, job, pauseRequests, cancelRequests)
@@ -195,6 +202,7 @@ func (w *Worker) Wait() {
 // processJob processes a single transcode job
 func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseRequests, cancelRequests map[int64]bool) {
 	startTime := time.Now()
+	workerID := fmt.Sprintf("worker-%d", w.id)
 
 	// Create job-specific context
 	jobCtx, jobCancel := context.WithCancel(ctx)
@@ -203,12 +211,14 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Create a dedicated scanner with its own SSH connection for this job
 	jobScanner, err := scanner.New(w.cfg, w.db)
 	if err != nil {
+		logging.Error("[%s] Job %d failed: Failed to create scanner: %v", workerID, job.ID, err)
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to create scanner: %v", err))
 		return
 	}
 
 	// Establish SSH/SFTP connection
 	if err := jobScanner.Connect(jobCtx); err != nil {
+		logging.Error("[%s] Job %d failed: Failed to connect to remote server: %v", workerID, job.ID, err)
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to connect to remote server: %v", err))
 		return
 	}
@@ -248,6 +258,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Create work directory if it doesn't exist
 	if err := os.MkdirAll(workDir, 0755); err != nil {
+		logging.Error("[%s] Job %d failed: Failed to create work directory: %v", workerID, job.ID, err)
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to create work directory: %v", err))
 		return
 	}
@@ -277,6 +288,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		})
 
 		if err != nil {
+			logging.Error("[%s] Job %d failed: Download failed: %v", workerID, job.ID, err)
 			w.db.FailJob(job.ID, fmt.Sprintf("Download failed: %v", err))
 			return
 		}
@@ -313,6 +325,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				w.updateProgress(job.ID, types.StageTranscode, 100, "Transcode skipped (file already exists)", 0, 0)
 				result, err := checksum.CalculateFile(localOutputPath)
 				if err != nil {
+					logging.Error("[%s] Job %d failed: Failed to calculate output checksum: %v", workerID, job.ID, err)
 					w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
 					return
 				}
@@ -327,6 +340,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				w.updateProgress(job.ID, types.StageTranscode, 100, "Transcode skipped (file already exists)", 0, 0)
 				result, err := checksum.CalculateFile(localOutputPath)
 				if err != nil {
+					logging.Error("[%s] Job %d failed: Failed to calculate output checksum: %v", workerID, job.ID, err)
 					w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
 					return
 				}
@@ -376,6 +390,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		close(fileSizeDone)
 
 		if err != nil {
+			logging.Error("[%s] Job %d failed: Transcode failed: %v", workerID, job.ID, err)
 			w.db.FailJob(job.ID, fmt.Sprintf("Transcode failed: %v", err))
 			return
 		}
@@ -390,6 +405,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		// Stage 3: Validate
 		w.updateProgress(job.ID, types.StageValidate, 0, "Validating", 0, 0)
 		if err := w.encoder.Verify(jobCtx, localOutputPath); err != nil {
+			logging.Error("[%s] Job %d failed: Validation failed: %v", workerID, job.ID, err)
 			w.db.FailJob(job.ID, fmt.Sprintf("Validation failed: %v", err))
 			return
 		}
@@ -397,6 +413,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		// Calculate checksum of transcoded file
 		result, err := checksum.CalculateFile(localOutputPath)
 		if err != nil {
+			logging.Error("[%s] Job %d failed: Failed to calculate output checksum: %v", workerID, job.ID, err)
 			w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
 			return
 		}
@@ -414,6 +431,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Get transcoded file size
 	transcodedInfo, err := w.encoder.GetFileInfo(localOutputPath)
 	if err != nil {
+		logging.Error("[%s] Job %d failed: Failed to get transcoded file info: %v", workerID, job.ID, err)
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to get transcoded file info: %v", err))
 		return
 	}
@@ -430,12 +448,14 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	})
 
 	if err != nil {
+		logging.Error("[%s] Job %d failed: Upload failed: %v", workerID, job.ID, err)
 		w.db.FailJob(job.ID, fmt.Sprintf("Upload failed: %v", err))
 		return
 	}
 
 	// Verify upload checksum matches local output checksum
 	if uploadedChecksum != localOutputChecksum {
+		logging.Error("[%s] Job %d failed: Upload checksum mismatch: expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
 		w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum))
 		jobScanner.DeleteRemoteFile(remoteTempPath)
 		return
@@ -453,6 +473,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Replace original file with transcoded file atomically
 	// First delete the original
 	if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
+		logging.Error("[%s] Job %d failed: Failed to delete original file: %v", workerID, job.ID, err)
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
 		jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
 		return
@@ -460,6 +481,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Rename transcoded file to original name (atomic operation)
 	if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
+		logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
 		w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
 		jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
 		return
@@ -477,6 +499,11 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Complete the job with checksum information
 	w.db.CompleteJobWithChecksums(job.ID, transcodedInfo.Size, encodingTime, fps, localInputChecksum, localOutputChecksum, uploadedChecksum)
 	w.updateProgress(job.ID, types.StageUpload, 100, "Completed", transcodedInfo.Size, transcodedInfo.Size)
+
+	// Log successful completion with stats
+	sizeReduction := float64(job.FileSizeBytes-transcodedInfo.Size) / float64(job.FileSizeBytes) * 100
+	logging.Info("[%s] Job %d completed: %s (%.1f%% size reduction, %ds encode time)",
+		workerID, job.ID, job.FileName, sizeReduction, encodingTime)
 
 	// Mark job as completed so cleanup doesn't delete work directory
 	jobCompleted = true

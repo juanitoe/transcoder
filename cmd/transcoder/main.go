@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"transcoder/internal/config"
 	"transcoder/internal/database"
+	"transcoder/internal/logging"
 	"transcoder/internal/scanner"
 	"transcoder/internal/transcode"
 	"transcoder/internal/tui"
@@ -35,19 +36,31 @@ func runTUI() error {
 		fmt.Scanln()
 	}
 
+	// Initialize application logging
+	if err := logging.Init(cfg.Logging.File, cfg.Logging.Level); err != nil {
+		fmt.Printf("Warning: Failed to initialize logging: %v\n", err)
+	}
+	defer logging.Close()
+
+	logging.Info("Configuration loaded from %s", configPath)
+
 	// Open database
 	dbPath := os.ExpandEnv(cfg.Database.Path)
 	db, err := database.New(dbPath)
 	if err != nil {
+		logging.Error("Failed to open database: %v", err)
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 	defer db.Close()
+	logging.Info("Database opened: %s", dbPath)
 
 	// Recover jobs from previous run (requeue orphaned jobs)
 	recoveredCount, err := db.RecoverJobs()
 	if err != nil {
+		logging.Warn("Failed to recover jobs: %v", err)
 		fmt.Printf("Warning: Failed to recover jobs: %v\n", err)
 	} else if recoveredCount > 0 {
+		logging.Info("Recovered %d orphaned jobs from previous run", recoveredCount)
 		fmt.Printf("Recovered %d orphaned jobs from previous run\n", recoveredCount)
 		fmt.Println("Press Enter to continue...")
 		fmt.Scanln()
@@ -64,9 +77,12 @@ func runTUI() error {
 
 	// Start worker pool
 	workerPool.Start()
+	logging.Info("Worker pool started with %d workers", cfg.Workers.MaxWorkers)
 	defer func() {
 		fmt.Println("\nShutting down gracefully...")
+		logging.Info("Shutting down worker pool...")
 		workerPool.Stop()
+		logging.Info("Worker pool stopped")
 		fmt.Println("Worker pool stopped")
 	}()
 

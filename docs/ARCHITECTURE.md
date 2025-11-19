@@ -292,21 +292,61 @@ remote:
   host: "media-server"
   port: 22
   user: "user"
-  library_path: "/path/to/media"
+  media_paths:
+    - "/path/to/media"
 
-local:
-  database_path: "~/transcoder/transcoder.db"
+database:
+  path: "~/transcoder/transcoder.db"
 
 workers:
   max_workers: 2
   work_dir: "~/transcoder_temp"
 
-encoding:
-  codec: "libx265"
+encoder:
+  codec: "hevc_videotoolbox"
+  quality: 75
   preset: "medium"
-  crf: 23
-  # Additional FFmpeg options...
+
+logging:
+  level: "info"                           # debug, info, warn, error
+  file: "~/transcoder/transcoder.log"     # Application log
+  scanner_log: "~/transcoder/scanner.log" # Scanner debug log
 ```
+
+---
+
+## Logging
+
+### Log Files
+
+| Log File | Purpose |
+|----------|---------|
+| `transcoder.log` | Application events: job claims, completions, failures, worker scaling |
+| `scanner.log` | Scanner debug output: SSH connection, ffprobe results, file discovery |
+
+### Log Levels
+
+- **debug**: Verbose output for development
+- **info**: Job lifecycle events, startup/shutdown
+- **warn**: Recoverable errors, configuration issues
+- **error**: Job failures, connection errors
+
+### What Gets Logged
+
+**Application Log (`transcoder.log`):**
+- Startup and shutdown
+- Database operations
+- Worker pool scaling
+- Job claims: `[worker-0] Claimed job 123: Movie.mkv`
+- Job completions with stats: `[worker-0] Job 123 completed: Movie.mkv (45.2% size reduction, 1234s encode time)`
+- Job failures with errors
+
+**Scanner Log (`scanner.log`):**
+- SSH connection details
+- Directory traversal
+- ffprobe command results
+- Checksum calculations
+- File additions/updates
 
 ---
 
