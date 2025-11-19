@@ -58,8 +58,11 @@ func (wp *WorkerPool) Start() {
 	// Create workers
 	for i := 0; i < wp.workerCount; i++ {
 		worker := NewWorker(i, wp.cfg, wp.db, wp.scanner, wp.encoder, wp.progressChan)
+		// Create a context for this worker that can be cancelled individually
+		workerCtx, workerCancel := context.WithCancel(wp.ctx)
+		worker.cancel = workerCancel
 		wp.workers = append(wp.workers, worker)
-		go worker.Run(wp.ctx, wp.pauseRequests, wp.cancelRequests)
+		go worker.Run(workerCtx, wp.pauseRequests, wp.cancelRequests)
 	}
 }
 
@@ -94,11 +97,18 @@ func (wp *WorkerPool) ScaleWorkers(newCount int) {
 		// Add workers
 		for i := currentCount; i < newCount; i++ {
 			worker := NewWorker(i, wp.cfg, wp.db, wp.scanner, wp.encoder, wp.progressChan)
+			workerCtx, workerCancel := context.WithCancel(wp.ctx)
+			worker.cancel = workerCancel
 			wp.workers = append(wp.workers, worker)
-			go worker.Run(wp.ctx, wp.pauseRequests, wp.cancelRequests)
+			go worker.Run(workerCtx, wp.pauseRequests, wp.cancelRequests)
 		}
 	} else if newCount < currentCount {
-		// Remove workers (they'll finish their current jobs)
+		// Cancel and remove excess workers
+		for i := newCount; i < currentCount; i++ {
+			if wp.workers[i].cancel != nil {
+				wp.workers[i].cancel() // Signal worker to stop
+			}
+		}
 		wp.workers = wp.workers[:newCount]
 	}
 
@@ -129,6 +139,7 @@ type Worker struct {
 	encoder      *Encoder
 	progressChan chan types.ProgressUpdate
 	wg           sync.WaitGroup
+	cancel       context.CancelFunc // To stop this specific worker
 }
 
 // NewWorker creates a new worker
