@@ -421,9 +421,79 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleMouseClick processes mouse clicks
+// handleMouseClick processes mouse clicks and wheel events
 func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// Only handle left clicks
+	// Handle mouse wheel scrolling
+	if msg.Type == tea.MouseWheelUp {
+		switch m.viewMode {
+		case ViewLogs:
+			if m.logScrollOffset > 0 {
+				m.logScrollOffset -= 3 // Scroll up 3 lines
+				if m.logScrollOffset < 0 {
+					m.logScrollOffset = 0
+				}
+			}
+			return m, nil
+		case ViewJobs:
+			// Scroll job list up
+			if m.jobsPanel == 0 {
+				if m.activeJobsScrollOffset > 0 {
+					m.activeJobsScrollOffset--
+				}
+			} else {
+				if m.queuedJobsScrollOffset > 0 {
+					m.queuedJobsScrollOffset--
+				}
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
+	if msg.Type == tea.MouseWheelDown {
+		switch m.viewMode {
+		case ViewLogs:
+			availableHeight := m.height - 7
+			if availableHeight < 1 {
+				availableHeight = 10
+			}
+			maxScrollOffset := len(m.logs) - availableHeight
+			if maxScrollOffset < 0 {
+				maxScrollOffset = 0
+			}
+			if m.logScrollOffset < maxScrollOffset {
+				m.logScrollOffset += 3 // Scroll down 3 lines
+				if m.logScrollOffset > maxScrollOffset {
+					m.logScrollOffset = maxScrollOffset
+				}
+			}
+			return m, nil
+		case ViewJobs:
+			// Scroll job list down
+			visibleHeight := m.calculateVisibleJobsHeight()
+			if m.jobsPanel == 0 {
+				maxScroll := len(m.activeJobs) - visibleHeight
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.activeJobsScrollOffset < maxScroll {
+					m.activeJobsScrollOffset++
+				}
+			} else {
+				maxScroll := len(m.queuedJobs) - visibleHeight
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.queuedJobsScrollOffset < maxScroll {
+					m.queuedJobsScrollOffset++
+				}
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Only handle left clicks below
 	if msg.Type != tea.MouseLeft {
 		return m, nil
 	}
@@ -493,6 +563,63 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.jobsPanel = 1
 			m.selectedJob = 0
 			m.queuedJobsScrollOffset = 0
+			return m, nil
+		}
+	}
+
+	// Handle clicks on individual jobs in Jobs view
+	// Jobs start at row 8 (header=0, status=1, empty=2, box_border=3, panel_tabs=4, empty=5, total=6, empty=7, jobs=8+)
+	// Each job takes 4 lines (with enhanced selected style wrapping)
+	if m.viewMode == ViewJobs && msg.Y >= 8 {
+		jobsStartY := 8
+		clickedY := msg.Y - jobsStartY
+
+		// Each job takes 4 lines (job line + status line + progress line + empty line)
+		jobIndex := clickedY / 4
+
+		// Adjust for scroll offset
+		if m.jobsPanel == 0 {
+			jobIndex += m.activeJobsScrollOffset
+			if jobIndex >= 0 && jobIndex < len(m.activeJobs) {
+				m.selectedJob = jobIndex
+				return m, nil
+			}
+		} else {
+			jobIndex += m.queuedJobsScrollOffset
+			if jobIndex >= 0 && jobIndex < len(m.queuedJobs) {
+				m.selectedJob = jobIndex
+				return m, nil
+			}
+		}
+	}
+
+	// Handle clicks on Settings fields
+	// Settings layout: header(0), status(1), empty(2), box_border(3), title(4), empty(5)
+	// Remote Config header(6), Host(7), User(8), Port(9), SSH Key(10)
+	// Encoder header(11), Codec(12), Quality(13), Preset(14)
+	// Worker header(15), Max Workers(16), Work Dir(17)
+	// Database header(18), DB Path(19)
+	if m.viewMode == ViewSettings && msg.Y >= 7 {
+		// Map Y positions to setting indices
+		// Remote: Host=7, User=8, Port=9, SSH Key=10
+		// Encoder: Quality=13, Preset=14
+		// Worker: Max Workers=16, Work Dir=17
+		// Database: DB Path=19
+
+		settingMapping := map[int]int{
+			7: 0,  // Host
+			8: 1,  // User
+			9: 2,  // Port
+			10: 3, // SSH Key
+			13: 4, // Quality
+			14: 5, // Preset
+			16: 6, // Max Workers
+			17: 7, // Work Dir
+			19: 8, // Database Path
+		}
+
+		if settingIndex, ok := settingMapping[msg.Y]; ok {
+			m.selectedSetting = settingIndex
 			return m, nil
 		}
 	}
