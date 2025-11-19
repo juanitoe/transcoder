@@ -310,10 +310,6 @@ func (m Model) renderJobs() string {
 
 				if isSelected {
 					panelContent += enhancedSelectedStyle.Render("► "+jobText) + "\n"
-					// Show action dropdown after selected job if active
-					if m.showJobActionDropdown {
-						panelContent += m.renderJobActionsDropdown(job)
-					}
 				} else {
 					panelContent += jobText + "\n"
 				}
@@ -360,10 +356,6 @@ func (m Model) renderJobs() string {
 
 				if isSelected {
 					panelContent += enhancedSelectedStyle.Render("► "+jobText) + "\n"
-					// Show action dropdown after selected job if active
-					if m.showJobActionDropdown {
-						panelContent += m.renderJobActionsDropdown(job)
-					}
 				} else {
 					panelContent += jobText + "\n"
 				}

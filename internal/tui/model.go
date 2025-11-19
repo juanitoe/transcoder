@@ -353,12 +353,101 @@ func (m Model) View() string {
 		Width(m.width).
 		Height(contentHeight)
 
+	renderedContent := contentStyle.Render(content)
+
+	// Overlay job action dropdown if visible
+	if m.viewMode == ViewJobs && m.showJobActionDropdown {
+		renderedContent = m.overlayJobActionDropdown(renderedContent)
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
-		contentStyle.Render(content),
+		renderedContent,
 		footer,
 	)
+}
+
+// overlayJobActionDropdown overlays the action dropdown on top of the content
+func (m Model) overlayJobActionDropdown(content string) string {
+	// Get current job
+	var jobs []*types.TranscodeJob
+	var scrollOffset int
+
+	if m.jobsPanel == 0 {
+		jobs = m.activeJobs
+		scrollOffset = m.activeJobsScrollOffset
+	} else {
+		jobs = m.queuedJobs
+		scrollOffset = m.queuedJobsScrollOffset
+	}
+
+	if m.selectedJob >= len(jobs) {
+		return content
+	}
+
+	job := jobs[m.selectedJob]
+
+	// Calculate Y position of selected job
+	// header(0) + status(1) + empty(2) + box_border(3) + panel_tabs(4) + empty(5) + total_line(6) + empty(7) = jobs_start(8)
+	baseY := 8
+
+	// Calculate which visible job index this is (accounting for scroll)
+	visibleJobIndex := m.selectedJob - scrollOffset
+	if visibleJobIndex < 0 {
+		return content // Job not visible, don't show dropdown
+	}
+
+	// Each job takes 4 lines
+	jobY := baseY + (visibleJobIndex * 4)
+
+	// Position dropdown below the selected job (after the 4 lines)
+	dropdownY := jobY + 4
+
+	// X position: indent from left edge
+	dropdownX := 6
+
+	// Render the dropdown
+	dropdown := m.renderJobActionsDropdown(job)
+
+	// Split content into lines
+	contentLines := strings.Split(content, "\n")
+
+	// Insert dropdown lines at the appropriate position
+	dropdownLines := strings.Split(dropdown, "\n")
+
+	// Create new content with dropdown overlaid
+	var result strings.Builder
+	for i, line := range contentLines {
+		if i >= dropdownY && i < dropdownY+len(dropdownLines) {
+			// Overlay this line with dropdown
+			dropdownLine := dropdownLines[i-dropdownY]
+
+			// Build the overlaid line: original line with dropdown on top
+			var overlaidLine string
+			if len(line) < dropdownX {
+				// Pad line to reach dropdownX
+				overlaidLine = line + strings.Repeat(" ", dropdownX-len(line)) + dropdownLine
+			} else {
+				// Take left part, add dropdown, keep any remainder
+				leftPart := line[:dropdownX]
+				endX := dropdownX + len(dropdownLine)
+				if endX < len(line) {
+					overlaidLine = leftPart + dropdownLine + line[endX:]
+				} else {
+					overlaidLine = leftPart + dropdownLine
+				}
+			}
+			result.WriteString(overlaidLine)
+		} else {
+			result.WriteString(line)
+		}
+		if i < len(contentLines)-1 {
+			result.WriteString("\n")
+		}
+	}
+
+	return result.String()
 }
 
 // handleKeyPress processes keyboard input
@@ -644,9 +733,6 @@ func (m Model) calculateJobIndexFromClick(clickY int) int {
 
 	// Iterate through visible jobs and track Y positions
 	for i := startIdx; i < endIdx; i++ {
-		job := jobs[i]
-		isSelected := (i == m.selectedJob)
-
 		// Each job has:
 		// - Job info line (1 line)
 		// - Status line (1 line)
@@ -655,15 +741,8 @@ func (m Model) calculateJobIndexFromClick(clickY int) int {
 		jobStartY := currentY
 		jobEndY := currentY + 4
 
-		// If this job is selected and dropdown is shown, add dropdown height
-		if isSelected && m.showJobActionDropdown {
-			actions := m.getJobActions(job)
-			// Dropdown adds: empty line + N action lines + empty line + help line + border lines
-			dropdownHeight := len(actions) + 5
-			jobEndY += dropdownHeight
-		}
-
 		// Check if click falls within this job's range
+		// Note: Dropdown floats and doesn't affect click detection
 		if clickY >= jobStartY && clickY < jobEndY {
 			return i
 		}
