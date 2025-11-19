@@ -90,59 +90,41 @@ func (m Model) renderDashboard() string {
 
 	stats := m.statistics
 
-	// Calculate box widths for better layout
-	// Left column (Stats + Worker): ~35% of width
-	// Right column (Active Jobs): ~60% of width
-	// Spacing between columns: 4 chars
-	leftPanelWidth := int(float64(m.width) * 0.35)
-	if leftPanelWidth < 35 {
-		leftPanelWidth = 35 // Minimum width for readability
+	// Full width boxes with consistent padding
+	boxWidth := m.width - 4 // Leave small margin
+	if boxWidth < 60 {
+		boxWidth = 60 // Minimum width
 	}
 
-	rightPanelWidth := m.width - leftPanelWidth - 6 // 6 for spacing and margins
-	if rightPanelWidth < 40 {
-		rightPanelWidth = 40
-	}
-
-	// Statistics boxes
+	// Library Statistics - Full width
 	statsBox := boxStyle.Copy().
-		Width(leftPanelWidth).
+		Width(boxWidth).
 		Render(fmt.Sprintf(
-		"📊 Library Statistics\n\n"+
-			"Total Files:      %d\n"+
-			"To Transcode:     %d\n"+
-			"In Progress:      %d\n"+
-			"Completed:        %d\n"+
-			"Failed:           %d\n\n"+
-			"Total Size:       %s\n"+
-			"Space Saved:      %s (%.1f%%)\n"+
-			"Avg Reduction:    %.1f%%",
-		stats.TotalFiles,
-		stats.ToTranscode,
-		stats.InProgress,
-		stats.Completed,
-		stats.Failed,
-		formatBytes(stats.TotalSize),
-		formatBytes(stats.SpaceSaved),
-		stats.SpaceSavedPercent,
-		stats.AvgSizeReduction,
-	))
+			"📊 Library Statistics\n\n"+
+				"Total Files:      %d     To Transcode:  %d     In Progress:  %d     Completed:  %d     Failed:  %d\n"+
+				"Total Size:       %s     Space Saved:   %s (%.1f%%)     Avg Reduction:  %.1f%%",
+			stats.TotalFiles,
+			stats.ToTranscode,
+			stats.InProgress,
+			stats.Completed,
+			stats.Failed,
+			formatBytes(stats.TotalSize),
+			formatBytes(stats.SpaceSaved),
+			stats.SpaceSavedPercent,
+			stats.AvgSizeReduction,
+		))
 
-	// Worker status
+	// Worker Status - Full width
 	workerBox := boxStyle.Copy().
-		Width(leftPanelWidth).
+		Width(boxWidth).
 		Render(fmt.Sprintf(
-			"⚙️  Worker Status\n\n"+
-				"Active Workers:   %d\n"+
-				"Max Workers:      %d\n"+
-				"Queued Jobs:      %d\n\n"+
-				"Use [+/-] in Settings to scale workers",
+			"⚙️  Worker Status     •     Active: %d     •     Max: %d     •     Queued Jobs: %d     •     Use [+/-] in Settings to scale workers",
 			len(m.activeJobs),
 			m.cfg.Workers.MaxWorkers,
 			len(m.queuedJobs),
 		))
 
-	// Active jobs
+	// Active Jobs - Full width
 	activeJobsStr := "🎬 Active Jobs\n\n"
 	if len(m.activeJobs) == 0 {
 		activeJobsStr += statusStyle.Render("No active jobs")
@@ -177,10 +159,10 @@ func (m Model) renderDashboard() string {
 
 			activeJobsStr += fmt.Sprintf(
 				"Job #%d  %s\n"+
-				"    %s | %s%s\n"+
-				"    %s\n\n",
+					"    %s | %s%s\n"+
+					"    %s\n\n",
 				job.ID,
-				truncateString(job.FileName, 40),
+				truncateString(job.FileName, 60),
 				statusColor.Render(string(job.Status)),
 				job.WorkerID,
 				sizeInfo,
@@ -189,17 +171,14 @@ func (m Model) renderDashboard() string {
 		}
 	}
 	activeBox := boxStyle.Copy().
-		Width(rightPanelWidth).
+		Width(boxWidth).
 		Render(activeJobsStr)
 
-	// Layout: Two columns with spacing
-	leftCol := lipgloss.JoinVertical(lipgloss.Left, statsBox, workerBox)
-	spacer := strings.Repeat(" ", 2) // Horizontal spacing between columns
-
-	dashboard := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		leftCol,
-		spacer,
+	// Stack vertically: Stats, Worker Status, Active Jobs
+	dashboard := lipgloss.JoinVertical(
+		lipgloss.Left,
+		statsBox,
+		workerBox,
 		activeBox,
 	)
 
