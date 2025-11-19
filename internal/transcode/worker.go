@@ -58,11 +58,8 @@ func (wp *WorkerPool) Start() {
 	// Create workers
 	for i := 0; i < wp.workerCount; i++ {
 		worker := NewWorker(i, wp.cfg, wp.db, wp.scanner, wp.encoder, wp.progressChan)
-		// Create a context for this worker that can be cancelled individually
-		workerCtx, workerCancel := context.WithCancel(wp.ctx)
-		worker.cancel = workerCancel
 		wp.workers = append(wp.workers, worker)
-		go worker.Run(workerCtx, wp.pauseRequests, wp.cancelRequests)
+		go worker.Run(wp.ctx, wp.pauseRequests, wp.cancelRequests)
 	}
 }
 
@@ -97,19 +94,16 @@ func (wp *WorkerPool) ScaleWorkers(newCount int) {
 		// Add workers
 		for i := currentCount; i < newCount; i++ {
 			worker := NewWorker(i, wp.cfg, wp.db, wp.scanner, wp.encoder, wp.progressChan)
-			workerCtx, workerCancel := context.WithCancel(wp.ctx)
-			worker.cancel = workerCancel
 			wp.workers = append(wp.workers, worker)
-			go worker.Run(workerCtx, wp.pauseRequests, wp.cancelRequests)
+			go worker.Run(wp.ctx, wp.pauseRequests, wp.cancelRequests)
 		}
 	} else if newCount < currentCount {
-		// Cancel and remove excess workers
+		// Signal excess workers to stop after their current job completes
 		for i := newCount; i < currentCount; i++ {
-			if wp.workers[i].cancel != nil {
-				wp.workers[i].cancel() // Signal worker to stop
-			}
+			wp.workers[i].stopping = true
 		}
-		wp.workers = wp.workers[:newCount]
+		// Keep them in the slice until they actually stop
+		// They'll exit after finishing their current job
 	}
 
 	wp.workerCount = newCount
@@ -139,7 +133,7 @@ type Worker struct {
 	encoder      *Encoder
 	progressChan chan types.ProgressUpdate
 	wg           sync.WaitGroup
-	cancel       context.CancelFunc // To stop this specific worker
+	stopping     bool // Signal to stop after current job completes
 }
 
 // NewWorker creates a new worker
@@ -169,6 +163,11 @@ func (w *Worker) Run(ctx context.Context, pauseRequests, cancelRequests map[int6
 		default:
 		}
 
+		// Check if this worker should stop (graceful shutdown after scaling down)
+		if w.stopping {
+			return
+		}
+
 		// Claim next job from queue
 		job, err := w.db.ClaimNextJob(workerID)
 		if err != nil {
@@ -183,7 +182,7 @@ func (w *Worker) Run(ctx context.Context, pauseRequests, cancelRequests map[int6
 			continue
 		}
 
-		// Process the job
+		// Process the job (will complete fully before checking stopping flag again)
 		w.processJob(ctx, job, pauseRequests, cancelRequests)
 	}
 }
