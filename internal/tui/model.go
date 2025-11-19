@@ -1076,12 +1076,12 @@ func (m *Model) refreshData() {
 func (m Model) calculateVisibleJobsHeight() int {
 	// Approximate calculation:
 	// Screen height - header (3 lines) - footer (3 lines) - panel title (3 lines) - help text (2 lines) - margins (4 lines)
-	// Each job takes 2 lines
+	// Each job takes 4 lines (job line + status line + progress line + spacing)
 	availableHeight := m.height - 15
-	if availableHeight < 2 {
-		availableHeight = 2
+	if availableHeight < 4 {
+		availableHeight = 4
 	}
-	return availableHeight / 2 // Each job takes 2 lines
+	return availableHeight / 4 // Each job takes 4 lines with enhanced selection
 }
 
 // Styles
