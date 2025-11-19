@@ -96,33 +96,51 @@ func (m Model) renderDashboard() string {
 		boxWidth = 60 // Minimum width
 	}
 
-	// Library Statistics - Full width
+	// Library Statistics - Full width with formatted labels
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Dim gray for labels
+
+	statsContent := fmt.Sprintf(
+		"📊 Library Statistics\n\n"+
+			"%s %d     %s %d     %s %d     %s %d     %s %d\n"+
+			"%s %s     %s %s (%.1f%%)     %s %.1f%%",
+		labelStyle.Render("Total Files:"),
+		stats.TotalFiles,
+		labelStyle.Render("To Transcode:"),
+		stats.ToTranscode,
+		labelStyle.Render("In Progress:"),
+		stats.InProgress,
+		labelStyle.Render("Completed:"),
+		stats.Completed,
+		labelStyle.Render("Failed:"),
+		stats.Failed,
+		labelStyle.Render("Total Size:"),
+		formatBytes(stats.TotalSize),
+		labelStyle.Render("Space Saved:"),
+		formatBytes(stats.SpaceSaved),
+		stats.SpaceSavedPercent,
+		labelStyle.Render("Avg Reduction:"),
+		stats.AvgSizeReduction,
+	)
+
 	statsBox := boxStyle.Copy().
 		Width(boxWidth).
-		Render(fmt.Sprintf(
-			"📊 Library Statistics\n\n"+
-				"Total Files:      %d     To Transcode:  %d     In Progress:  %d     Completed:  %d     Failed:  %d\n"+
-				"Total Size:       %s     Space Saved:   %s (%.1f%%)     Avg Reduction:  %.1f%%",
-			stats.TotalFiles,
-			stats.ToTranscode,
-			stats.InProgress,
-			stats.Completed,
-			stats.Failed,
-			formatBytes(stats.TotalSize),
-			formatBytes(stats.SpaceSaved),
-			stats.SpaceSavedPercent,
-			stats.AvgSizeReduction,
-		))
+		Render(statsContent)
 
-	// Worker Status - Full width
+	// Worker Status - Full width with formatted labels
+	workerContent := fmt.Sprintf(
+		"⚙️  Worker Status     •     %s %d     •     %s %d     •     %s %d     •     %s",
+		labelStyle.Render("Active:"),
+		len(m.activeJobs),
+		labelStyle.Render("Max:"),
+		m.cfg.Workers.MaxWorkers,
+		labelStyle.Render("Queued Jobs:"),
+		len(m.queuedJobs),
+		labelStyle.Render("Use [+/-] in Settings to scale workers"),
+	)
+
 	workerBox := boxStyle.Copy().
 		Width(boxWidth).
-		Render(fmt.Sprintf(
-			"⚙️  Worker Status     •     Active: %d     •     Max: %d     •     Queued Jobs: %d     •     Use [+/-] in Settings to scale workers",
-			len(m.activeJobs),
-			m.cfg.Workers.MaxWorkers,
-			len(m.queuedJobs),
-		))
+		Render(workerContent)
 
 	// Active Jobs - Full width
 	activeJobsStr := "🎬 Active Jobs\n\n"
