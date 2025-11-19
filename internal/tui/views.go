@@ -554,16 +554,21 @@ func (m Model) renderSettings() string {
 
 	// Help text
 	content += "\n\n"
-	if m.showPresetDropdown {
+	if m.showSaveDiscardPrompt {
+		// Show save/discard prompt
+		content += m.renderSaveDiscardPrompt()
+	} else if m.showPresetDropdown {
 		// Help text is shown in the dropdown itself
 	} else if m.isEditingSettings {
 		content += helpStyle.Render("[Enter] Save • [Esc] Cancel")
+	} else if m.configModified {
+		content += helpStyle.Render("[↑↓] Navigate • [Enter] Edit • [s] Save/Discard changes")
 	} else {
-		content += helpStyle.Render("[↑↓] Navigate • [Enter] Edit • [Ctrl+S] Save to file")
+		content += helpStyle.Render("[↑↓] Navigate • [Enter] Edit")
 	}
 
-	if m.configModified {
-		content += "\n" + successStyle.Render("Configuration modified (not saved to file)")
+	if m.configModified && !m.showSaveDiscardPrompt {
+		content += "\n" + successStyle.Render("⚠ Configuration modified (not saved to file)")
 	}
 
 	return boxStyle.Render(content)
@@ -620,6 +625,43 @@ func (m Model) renderPresetDropdown() string {
 	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
 
 	return dropdownStyle.Render(dropdown) + "\n"
+}
+
+// renderSaveDiscardPrompt renders the save/discard choice prompt
+func (m Model) renderSaveDiscardPrompt() string {
+	promptStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("214")). // Orange/warning color
+		Padding(0, 1)
+
+	selectedStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("214")).
+		Foreground(lipgloss.Color("0")).
+		Bold(true)
+
+	normalStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	var prompt string
+	prompt += "⚠  Unsaved Changes\n\n"
+
+	// Save option
+	if m.saveDiscardPromptIndex == 0 {
+		prompt += selectedStyle.Render(" ▶ Save to File     ") + "\n"
+	} else {
+		prompt += normalStyle.Render("   Save to File     ") + "\n"
+	}
+
+	// Discard option
+	if m.saveDiscardPromptIndex == 1 {
+		prompt += selectedStyle.Render(" ▶ Discard Changes ") + "\n"
+	} else {
+		prompt += normalStyle.Render("   Discard Changes ") + "\n"
+	}
+
+	prompt += "\n" + helpStyle.Render("↑↓/←→ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return promptStyle.Render(prompt)
 }
 
 // renderJobActionsDropdown renders a visual dropdown menu for job actions

@@ -119,12 +119,14 @@ type Model struct {
 	configModified bool
 
 	// Settings editing
-	isEditingSettings   bool
-	settingsInputs      []textinput.Model
-	validationError     string
-	configPath          string // Path to save config
-	showPresetDropdown  bool   // Show preset dropdown menu
-	presetDropdownIndex int    // Currently highlighted preset in dropdown
+	isEditingSettings      bool
+	settingsInputs         []textinput.Model
+	validationError        string
+	configPath             string // Path to save config
+	showPresetDropdown     bool   // Show preset dropdown menu
+	presetDropdownIndex    int    // Currently highlighted preset in dropdown
+	showSaveDiscardPrompt  bool   // Show save/discard prompt when config modified
+	saveDiscardPromptIndex int    // Currently highlighted option (0=Save, 1=Discard)
 
 	// Job actions
 	showJobActionDropdown  bool // Show job action dropdown menu
@@ -782,31 +784,9 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Handle clicks on Settings fields
-	// Settings layout: header(0), status(1), empty(2), box_border(3), title(4), empty(5)
-	// Remote Config header(6), Host(7), User(8), Port(9), SSH Key(10)
-	// Encoder header(11), Codec(12), Quality(13), Preset(14)
-	// Worker header(15), Max Workers(16), Work Dir(17)
-	// Database header(18), DB Path(19)
-	if m.viewMode == ViewSettings && msg.Y >= 7 {
-		// Map Y positions to setting indices
-		// Remote: Host=7, User=8, Port=9, SSH Key=10
-		// Encoder: Quality=13, Preset=14
-		// Worker: Max Workers=16, Work Dir=17
-		// Database: DB Path=19
-
-		settingMapping := map[int]int{
-			7: 0,  // Host
-			8: 1,  // User
-			9: 2,  // Port
-			10: 3, // SSH Key
-			13: 4, // Quality
-			14: 5, // Preset
-			16: 6, // Max Workers
-			17: 7, // Work Dir
-			19: 8, // Database Path
-		}
-
-		if settingIndex, ok := settingMapping[msg.Y]; ok {
+	if m.viewMode == ViewSettings && msg.Y >= 6 {
+		settingIndex := m.calculateSettingIndexFromClick(msg.Y)
+		if settingIndex >= 0 {
 			m.selectedSetting = settingIndex
 			return m, nil
 		}
@@ -862,6 +842,72 @@ func (m Model) calculateJobIndexFromClick(clickY int) int {
 	}
 
 	return -1 // No job clicked
+}
+
+// calculateSettingIndexFromClick calculates which setting was clicked based on Y position
+func (m Model) calculateSettingIndexFromClick(clickY int) int {
+	// Settings layout: header(0), status(1), empty(2), box_border(3), title(4), empty(5)
+	// Then dynamically: Remote Config header, 4 settings, Encoder header, Codec (fixed), 2 settings, Worker header, 2 settings, Database header, 1 setting
+
+	// Calculate starting Y position
+	// header(0) + status(1) + empty(2) + box_border(3) + title(4) + empty(5) = 6
+	currentY := 6
+
+	// Remote Configuration header
+	currentY++ // "Remote Configuration:"
+
+	// Remote settings (0-3): Host, User, Port, SSH Key
+	for i := 0; i < 4; i++ {
+		if clickY == currentY {
+			return i
+		}
+		currentY++
+	}
+
+	// Empty line + Encoder Settings header
+	currentY++ // empty line
+	currentY++ // "Encoder Settings:"
+
+	// Codec (fixed, not clickable)
+	currentY++
+
+	// Encoder settings (4-5): Quality, Preset
+	for i := 4; i < 6; i++ {
+		if clickY == currentY {
+			return i
+		}
+		currentY++
+
+		// If preset dropdown is showing and we're on Preset field, skip dropdown lines
+		if i == 5 && m.showPresetDropdown {
+			// Dropdown has variable height, skip it
+			// Approximate: 1 empty + 5 presets + 1 help = 7 lines + borders = ~9 lines
+			currentY += 9
+		}
+	}
+
+	// Empty line + Worker Configuration header
+	currentY++ // empty line
+	currentY++ // "Worker Configuration:"
+
+	// Worker settings (6-7): Max Workers, Work Directory
+	for i := 6; i < 8; i++ {
+		if clickY == currentY {
+			return i
+		}
+		currentY++
+	}
+
+	// Empty line + Database header
+	currentY++ // empty line
+	currentY++ // "Database:"
+
+	// Database setting (8): Database Path
+	if clickY == currentY {
+		return 8
+	}
+
+	return -1 // No setting clicked
 }
 
 // handleJobListKeys handles keys in job list views
@@ -1339,6 +1385,46 @@ func (m *Model) revertSettingValue(index int) {
 
 // handleSettingsKeys handles keys in settings view
 func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle save/discard prompt navigation
+	if m.showSaveDiscardPrompt {
+		switch msg.String() {
+		case "up", "k", "left", "h":
+			m.saveDiscardPromptIndex = 0 // Save
+			return m, nil
+		case "down", "j", "right", "l":
+			m.saveDiscardPromptIndex = 1 // Discard
+			return m, nil
+		case "enter":
+			if m.saveDiscardPromptIndex == 0 {
+				// Save
+				if err := m.cfg.Save(m.configPath); err != nil {
+					m.errorMsg = fmt.Sprintf("Failed to save config: %v", err)
+				} else {
+					m.statusMsg = "Configuration saved to file!"
+					m.configModified = false
+					m.addLog("INFO", "Configuration saved to "+m.configPath)
+				}
+			} else {
+				// Discard
+				// Reset all settings inputs to current config values
+				m.statusMsg = "Changes discarded"
+				m.configModified = false
+				for i := 0; i < 9; i++ {
+					m.revertSettingValue(i)
+				}
+				m.addLog("INFO", "Configuration changes discarded")
+			}
+			m.showSaveDiscardPrompt = false
+			return m, nil
+		case "esc":
+			// Cancel prompt
+			m.showSaveDiscardPrompt = false
+			m.statusMsg = ""
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// Handle preset dropdown navigation
 	if m.showPresetDropdown {
 		presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
@@ -1442,13 +1528,24 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 		}
 
+	case "s":
+		// Show save/discard prompt if there are changes
+		if m.configModified {
+			m.showSaveDiscardPrompt = true
+			m.saveDiscardPromptIndex = 0 // Default to Save
+			return m, nil
+		} else {
+			m.statusMsg = "No unsaved changes"
+		}
+
 	case "ctrl+s":
-		// Save config to file
+		// Quick save without prompt (keep for backwards compatibility)
 		if err := m.cfg.Save(m.configPath); err != nil {
 			m.errorMsg = fmt.Sprintf("Failed to save config: %v", err)
 		} else {
 			m.statusMsg = "Configuration saved to file!"
 			m.configModified = false
+			m.addLog("INFO", "Configuration saved to "+m.configPath)
 		}
 	}
 
