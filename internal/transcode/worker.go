@@ -527,6 +527,7 @@ func (w *Worker) updateProgress(jobID int64, stage types.ProcessingStage, progre
 		Message:          message,
 		BytesTransferred: bytesTransferred,
 		TotalBytes:       totalBytes,
+		Timestamp:        time.Now(),
 	}:
 	default:
 		// Channel full, skip this update

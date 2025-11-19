@@ -131,11 +131,21 @@ func (m Model) renderDashboard() string {
 			// Show file size info based on job status
 			sizeInfo := ""
 			if job.Status == types.StatusDownloading || job.Status == types.StatusUploading {
-				// Show bytes transferred for download/upload
-				if progress, ok := m.progressData[job.ID]; ok && progress.TotalBytes > 0 {
-					sizeInfo = fmt.Sprintf(" • %s / %s",
-						formatBytes(progress.BytesTransferred),
-						formatBytes(progress.TotalBytes))
+				// Show bytes transferred for download/upload with bandwidth
+				if history, ok := m.progressData[job.ID]; ok {
+					if progress := history.Latest(); progress != nil && progress.TotalBytes > 0 {
+						bandwidth := history.CalculateBandwidth()
+						if bandwidth > 0 {
+							sizeInfo = fmt.Sprintf(" • %s / %s • %s/s",
+								formatBytes(progress.BytesTransferred),
+								formatBytes(progress.TotalBytes),
+								formatBytes(int64(bandwidth)))
+						} else {
+							sizeInfo = fmt.Sprintf(" • %s / %s",
+								formatBytes(progress.BytesTransferred),
+								formatBytes(progress.TotalBytes))
+						}
+					}
 				}
 			} else if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
 				sizeInfo = fmt.Sprintf(" • %s / %s",
@@ -247,11 +257,21 @@ func (m Model) renderJobs() string {
 			// Show file size info based on job status
 			sizeInfo := ""
 			if job.Status == types.StatusDownloading || job.Status == types.StatusUploading {
-				// Show bytes transferred for download/upload
-				if progress, ok := m.progressData[job.ID]; ok && progress.TotalBytes > 0 {
-					sizeInfo = fmt.Sprintf("  (%s / %s)",
-						formatBytes(progress.BytesTransferred),
-						formatBytes(progress.TotalBytes))
+				// Show bytes transferred for download/upload with bandwidth
+				if history, ok := m.progressData[job.ID]; ok {
+					if progress := history.Latest(); progress != nil && progress.TotalBytes > 0 {
+						bandwidth := history.CalculateBandwidth()
+						if bandwidth > 0 {
+							sizeInfo = fmt.Sprintf("  (%s / %s • %s/s)",
+								formatBytes(progress.BytesTransferred),
+								formatBytes(progress.TotalBytes),
+								formatBytes(int64(bandwidth)))
+						} else {
+							sizeInfo = fmt.Sprintf("  (%s / %s)",
+								formatBytes(progress.BytesTransferred),
+								formatBytes(progress.TotalBytes))
+						}
+					}
 				}
 			} else if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
 				sizeInfo = fmt.Sprintf("  (%s / %s)",

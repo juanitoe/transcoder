@@ -26,6 +26,60 @@ const (
 	ViewLogs
 )
 
+// ProgressHistory tracks recent progress updates for bandwidth calculation
+type ProgressHistory struct {
+	Updates []types.ProgressUpdate // Circular buffer of recent updates
+	MaxSize int                    // Maximum number of updates to keep
+}
+
+// Add adds a new progress update to the history
+func (ph *ProgressHistory) Add(update types.ProgressUpdate) {
+	if ph.Updates == nil {
+		ph.MaxSize = 20 // Keep 20 updates (approximately 10 seconds of history)
+		ph.Updates = make([]types.ProgressUpdate, 0, ph.MaxSize)
+	}
+
+	// Add new update
+	ph.Updates = append(ph.Updates, update)
+
+	// Trim old updates if we exceed max size
+	if len(ph.Updates) > ph.MaxSize {
+		ph.Updates = ph.Updates[1:]
+	}
+}
+
+// Latest returns the most recent progress update
+func (ph *ProgressHistory) Latest() *types.ProgressUpdate {
+	if len(ph.Updates) == 0 {
+		return nil
+	}
+	return &ph.Updates[len(ph.Updates)-1]
+}
+
+// CalculateBandwidth calculates bandwidth in bytes/second using a time window
+func (ph *ProgressHistory) CalculateBandwidth() float64 {
+	if len(ph.Updates) < 2 {
+		return 0
+	}
+
+	newest := ph.Updates[len(ph.Updates)-1]
+	oldest := ph.Updates[0]
+
+	// Only calculate bandwidth for download/upload stages with byte counts
+	if newest.TotalBytes == 0 {
+		return 0
+	}
+
+	bytesDelta := newest.BytesTransferred - oldest.BytesTransferred
+	timeDelta := newest.Timestamp.Sub(oldest.Timestamp).Seconds()
+
+	if timeDelta <= 0 || bytesDelta <= 0 {
+		return 0
+	}
+
+	return float64(bytesDelta) / timeDelta
+}
+
 // Model is the Bubble Tea model for the TUI
 type Model struct {
 	cfg          *config.Config
@@ -44,7 +98,7 @@ type Model struct {
 	activeJobs   []*types.TranscodeJob
 	queuedJobs   []*types.TranscodeJob
 	recentJobs   []*types.TranscodeJob
-	progressData map[int64]types.ProgressUpdate // jobID -> latest progress
+	progressData map[int64]*ProgressHistory // jobID -> progress history with bandwidth
 
 	// Scanner state
 	scanning     bool
@@ -93,7 +147,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 		maxLogs:        200,
 		scannerLogPath: scannerLogPath,
 		scannerLogPos:  0,
-		progressData:   make(map[int64]types.ProgressUpdate),
+		progressData:   make(map[int64]*ProgressHistory),
 	}
 	m.addLog("INFO", "Transcoder TUI started")
 	return m
@@ -145,7 +199,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle progress update from workers
 		update := types.ProgressUpdate(msg)
 		if update.JobID > 0 {
-			m.progressData[update.JobID] = update
+			// Get or create progress history for this job
+			if m.progressData[update.JobID] == nil {
+				m.progressData[update.JobID] = &ProgressHistory{}
+			}
+			// Add update to history
+			m.progressData[update.JobID].Add(update)
 		}
 		m.refreshData()
 		return m, listenForProgress(m.workerPool)
