@@ -666,10 +666,11 @@ var (
 			Bold(true)
 
 	boxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+			Border(lipgloss.DoubleBorder()).
 			BorderForeground(lipgloss.Color("62")).
 			Padding(1, 2).
-			MarginBottom(1)
+			MarginBottom(2).
+			MarginRight(2)
 
 	selectedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205")).
