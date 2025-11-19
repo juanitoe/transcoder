@@ -296,70 +296,91 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	default:
 	}
 
-	// Stage 2: Transcode
-	w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
-	w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding", 0, 0)
-
-	// Start a goroutine to periodically update file size
-	fileSizeDone := make(chan bool)
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-fileSizeDone:
+	// Stage 2: Transcode (skip if output already exists and is valid - recovered job)
+	var localOutputChecksum string
+	if _, err := os.Stat(localOutputPath); err == nil {
+		// Transcoded file exists - verify it's valid
+		if err := w.encoder.Verify(jobCtx, localOutputPath); err == nil {
+			// Valid transcoded file - skip to upload
+			w.updateProgress(job.ID, types.StageTranscode, 100, "Transcode skipped (file already exists)", 0, 0)
+			result, err := checksum.CalculateFile(localOutputPath)
+			if err != nil {
+				w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
 				return
-			case <-ticker.C:
-				// Check output file size
-				if fileInfo, err := os.Stat(localOutputPath); err == nil {
-					w.db.UpdateJobFileSize(job.ID, fileInfo.Size())
+			}
+			localOutputChecksum = result.Hash
+		} else {
+			// Invalid file - remove and re-transcode
+			os.Remove(localOutputPath)
+		}
+	}
+
+	// Only transcode if we don't have a valid output yet
+	if localOutputChecksum == "" {
+		w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
+		w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding", 0, 0)
+
+		// Start a goroutine to periodically update file size
+		fileSizeDone := make(chan bool)
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-fileSizeDone:
+					return
+				case <-ticker.C:
+					// Check output file size
+					if fileInfo, err := os.Stat(localOutputPath); err == nil {
+						w.db.UpdateJobFileSize(job.ID, fileInfo.Size())
+					}
 				}
 			}
+		}()
+
+		// Get duration for progress calculation (in microseconds)
+		var durationUs int64 = 1
+		mediaFile, err := w.db.GetMediaFileByPath(job.FilePath)
+		if err == nil && mediaFile != nil && mediaFile.DurationSeconds > 0 {
+			durationUs = int64(mediaFile.DurationSeconds * 1000000)
 		}
-	}()
-	defer close(fileSizeDone)
 
-	// Get duration for progress calculation (in microseconds)
-	var durationUs int64 = 1
-	mediaFile, err := w.db.GetMediaFileByPath(job.FilePath)
-	if err == nil && mediaFile != nil && mediaFile.DurationSeconds > 0 {
-		durationUs = int64(mediaFile.DurationSeconds * 1000000)
+		err = w.encoder.Transcode(jobCtx, localInputPath, localOutputPath, durationUs, func(progress TranscodeProgress) {
+			w.updateProgress(job.ID, types.StageTranscode, progress.Progress,
+				fmt.Sprintf("Transcoding: frame=%d fps=%.1f speed=%.2fx", progress.Frame, progress.FPS, progress.Speed), 0, 0)
+		})
+
+		close(fileSizeDone)
+
+		if err != nil {
+			w.db.FailJob(job.ID, fmt.Sprintf("Transcode failed: %v", err))
+			return
+		}
+
+		// Check if cancelled
+		select {
+		case <-jobCtx.Done():
+			return
+		default:
+		}
+
+		// Stage 3: Validate
+		w.updateProgress(job.ID, types.StageValidate, 0, "Validating", 0, 0)
+		if err := w.encoder.Verify(jobCtx, localOutputPath); err != nil {
+			w.db.FailJob(job.ID, fmt.Sprintf("Validation failed: %v", err))
+			return
+		}
+
+		// Calculate checksum of transcoded file
+		result, err := checksum.CalculateFile(localOutputPath)
+		if err != nil {
+			w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
+			return
+		}
+		localOutputChecksum = result.Hash
+		w.updateProgress(job.ID, types.StageValidate, 100, "Validation passed", 0, 0)
 	}
-
-	err = w.encoder.Transcode(jobCtx, localInputPath, localOutputPath, durationUs, func(progress TranscodeProgress) {
-		w.updateProgress(job.ID, types.StageTranscode, progress.Progress,
-			fmt.Sprintf("Transcoding: frame=%d fps=%.1f speed=%.2fx", progress.Frame, progress.FPS, progress.Speed), 0, 0)
-	})
-
-	if err != nil {
-		w.db.FailJob(job.ID, fmt.Sprintf("Transcode failed: %v", err))
-		return
-	}
-
-	// Check if cancelled
-	select {
-	case <-jobCtx.Done():
-		return
-	default:
-	}
-
-	// Stage 3: Validate
-	w.updateProgress(job.ID, types.StageValidate, 0, "Validating", 0, 0)
-	if err := w.encoder.Verify(jobCtx, localOutputPath); err != nil {
-		w.db.FailJob(job.ID, fmt.Sprintf("Validation failed: %v", err))
-		return
-	}
-
-	// Calculate checksum of transcoded file
-	var localOutputChecksum string
-	result, err := checksum.CalculateFile(localOutputPath)
-	if err != nil {
-		w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
-		return
-	}
-	localOutputChecksum = result.Hash
-	w.updateProgress(job.ID, types.StageValidate, 100, "Validation passed", 0, 0)
 
 	// Check if cancelled
 	select {
