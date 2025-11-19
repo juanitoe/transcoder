@@ -261,13 +261,15 @@ func (m Model) renderJobs() string {
 
 			activeContent += style.Render(fmt.Sprintf(
 				"%sJob #%d  %s\n"+
-				"      %s  •  %s%s\n\n",
+				"      %s | %s%s\n"+
+				"      %s\n\n",
 				prefix,
 				job.ID,
 				truncateString(job.FileName, fileNameWidth),
 				statusColor.Render(string(job.Status)),
-				formatProgress(job.Progress),
+				job.WorkerID,
 				sizeInfo,
+				formatProgress(job.Progress),
 			))
 		}
 

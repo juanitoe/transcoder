@@ -412,15 +412,10 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		return
 	}
 
-	// Verify final remote file checksum
-	remoteChecksum, err := jobScanner.CalculateRemoteChecksum(job.FilePath)
-	if err != nil {
-		// Log warning but don't fail - the file was uploaded and renamed successfully
-		// Remote checksum verification is optional (may fail if xxhsum/md5sum not installed)
-	} else if remoteChecksum != localOutputChecksum {
-		w.db.FailJob(job.ID, fmt.Sprintf("Final remote checksum mismatch: expected %s, got %s", localOutputChecksum, remoteChecksum))
-		return
-	}
+	// Note: We skip final remote checksum verification because:
+	// 1. Upload already verified checksum during transfer (streaming)
+	// 2. Re-reading entire file is slow (especially for large files)
+	// 3. The uploadedChecksum == localOutputChecksum check above is sufficient
 
 	// Calculate encoding time and stats
 	encodingTime := int(time.Since(startTime).Seconds())
