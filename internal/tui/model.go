@@ -1606,6 +1606,10 @@ func (m Model) handleLogsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) refreshData() {
 	var err error
 
+	// Store previous job list lengths to detect changes
+	prevActiveCount := len(m.activeJobs)
+	prevQueuedCount := len(m.queuedJobs)
+
 	// Get statistics
 	m.statistics, err = m.db.GetStatistics()
 	if err != nil {
@@ -1628,6 +1632,29 @@ func (m *Model) refreshData() {
 	m.recentJobs, err = m.db.GetCompletedJobs(100)
 	if err != nil {
 		m.errorMsg = fmt.Sprintf("Failed to get completed jobs: %v", err)
+	}
+
+	// Close dropdowns/overlays if job lists changed (prevents rendering issues)
+	if m.jobsPanel == 0 && len(m.activeJobs) != prevActiveCount {
+		m.showJobActionDropdown = false
+		m.editingPriority = false
+	} else if m.jobsPanel == 1 && len(m.queuedJobs) != prevQueuedCount {
+		m.showJobActionDropdown = false
+		m.editingPriority = false
+	}
+
+	// Validate selected job index is still valid
+	var currentJobCount int
+	if m.jobsPanel == 0 {
+		currentJobCount = len(m.activeJobs)
+	} else {
+		currentJobCount = len(m.queuedJobs)
+	}
+
+	if m.selectedJob >= currentJobCount && currentJobCount > 0 {
+		m.selectedJob = currentJobCount - 1
+	} else if currentJobCount == 0 {
+		m.selectedJob = 0
 	}
 
 	m.lastUpdate = time.Now()
