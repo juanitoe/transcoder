@@ -157,6 +157,7 @@ func (db *DB) UpdateMediaFile(id int64, file *types.MediaFile) error {
 			audio_streams_json = ?, subtitle_streams_json = ?,
 			should_transcode = ?, transcoding_priority = ?,
 			estimated_size_reduction_percent = ?,
+			source_checksum = ?, source_checksum_algo = ?, source_checksum_at = ?,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`,
@@ -166,8 +167,23 @@ func (db *DB) UpdateMediaFile(id int64, file *types.MediaFile) error {
 		string(audioJSON), string(subtitleJSON),
 		file.ShouldTranscode, file.TranscodingPriority,
 		file.EstimatedSizeReductionPercent,
+		file.SourceChecksum, file.SourceChecksumAlgo, file.SourceChecksumAt,
 		id,
 	)
+
+	return err
+}
+
+// UpdateMediaFileChecksum updates just the checksum fields for a media file
+func (db *DB) UpdateMediaFileChecksum(id int64, checksum, algo string) error {
+	_, err := db.conn.Exec(`
+		UPDATE media_files SET
+			source_checksum = ?,
+			source_checksum_algo = ?,
+			source_checksum_at = CURRENT_TIMESTAMP,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, checksum, algo, id)
 
 	return err
 }

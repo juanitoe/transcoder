@@ -285,8 +285,20 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 			}
 
 			if existing == nil {
-				// New file - add to database
-				_, err := s.db.AddMediaFile(metadata)
+				// New file - calculate checksum and add to database
+				s.logDebug("Calculating checksum for new file: %s", fullPath)
+				remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
+				if err != nil {
+					s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
+					// Continue without checksum - not fatal
+				} else {
+					metadata.SourceChecksum = remoteChecksum
+					metadata.SourceChecksumAlgo = string(s.checksumAlgo)
+					now := time.Now()
+					metadata.SourceChecksumAt = &now
+				}
+
+				_, err = s.db.AddMediaFile(metadata)
 				if err != nil {
 					progress.ErrorCount++
 					progress.LastError = fmt.Errorf("failed to add %s to database: %w", fullPath, err)
@@ -297,8 +309,44 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 				}
 				progress.FilesAdded++
 			} else {
-				// Existing file - update if changed
+				// Existing file - check if changed
+				needsUpdate := false
+
 				if existing.FileSizeBytes != metadata.FileSizeBytes {
+					// Size changed - definitely needs update
+					needsUpdate = true
+					s.logDebug("File size changed for %s: %d -> %d", fullPath, existing.FileSizeBytes, metadata.FileSizeBytes)
+				} else if existing.SourceChecksum != "" {
+					// Same size but we have a stored checksum - verify it
+					s.logDebug("Verifying checksum for %s", fullPath)
+					remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
+					if err != nil {
+						s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
+					} else if remoteChecksum != existing.SourceChecksum {
+						// Checksum mismatch - file content changed
+						needsUpdate = true
+						s.logDebug("Checksum mismatch for %s: %s -> %s", fullPath, existing.SourceChecksum, remoteChecksum)
+						metadata.SourceChecksum = remoteChecksum
+						metadata.SourceChecksumAlgo = string(s.checksumAlgo)
+						now := time.Now()
+						metadata.SourceChecksumAt = &now
+					}
+				}
+
+				if needsUpdate {
+					// Calculate new checksum if we don't have it yet
+					if metadata.SourceChecksum == "" {
+						remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
+						if err != nil {
+							s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
+						} else {
+							metadata.SourceChecksum = remoteChecksum
+							metadata.SourceChecksumAlgo = string(s.checksumAlgo)
+							now := time.Now()
+							metadata.SourceChecksumAt = &now
+						}
+					}
+
 					metadata.ID = existing.ID
 					if err := s.db.UpdateMediaFile(existing.ID, metadata); err != nil {
 						progress.ErrorCount++
@@ -309,6 +357,15 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 						continue
 					}
 					progress.FilesUpdated++
+				} else if existing.SourceChecksum == "" {
+					// File unchanged but missing checksum - calculate and store it
+					s.logDebug("Calculating missing checksum for %s", fullPath)
+					remoteChecksum, err := s.CalculateRemoteChecksum(fullPath)
+					if err != nil {
+						s.logDebug("Warning: failed to calculate checksum for %s: %v", fullPath, err)
+					} else {
+						s.db.UpdateMediaFileChecksum(existing.ID, remoteChecksum, string(s.checksumAlgo))
+					}
 				}
 			}
 
