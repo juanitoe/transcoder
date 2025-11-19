@@ -717,8 +717,8 @@ func formatDuration(seconds int) string {
 	return fmt.Sprintf("%ds", s)
 }
 
-func formatProgress(progress float64) string {
-	bar := progressBar(progress, 20)
+func formatProgress(progress float64, stage types.ProcessingStage) string {
+	bar := coloredProgressBar(progress, 20, stage)
 	return fmt.Sprintf("[%s] %.1f%%", bar, progress)
 }
 
@@ -739,20 +739,56 @@ func progressBar(progress float64, width int) string {
 	return strings.Repeat("█", filled) + strings.Repeat("░", empty)
 }
 
+// coloredProgressBar creates a colored progress bar based on the stage
+func coloredProgressBar(progress float64, width int, stage types.ProcessingStage) string {
+	filled := int(progress / 100 * float64(width))
+	if filled > width {
+		filled = width
+	}
+	empty := width - filled
+
+	// Create colored filled portion
+	color := stageColor(stage)
+	filledStr := lipgloss.NewStyle().Foreground(color).Render(strings.Repeat("█", filled))
+	emptyStr := strings.Repeat("░", empty)
+
+	return filledStr + emptyStr
+}
+
 func statusColor(status types.JobStatus) lipgloss.Color {
 	switch status {
 	case types.StatusCompleted:
-		return lipgloss.Color("42")
+		return lipgloss.Color("42") // Green
 	case types.StatusFailed:
-		return lipgloss.Color("196")
-	case types.StatusTranscoding, types.StatusDownloading, types.StatusUploading:
-		return lipgloss.Color("226")
+		return lipgloss.Color("196") // Red
+	case types.StatusDownloading:
+		return lipgloss.Color("33") // Blue
+	case types.StatusTranscoding:
+		return lipgloss.Color("51") // Cyan
+	case types.StatusUploading:
+		return lipgloss.Color("42") // Green
 	case types.StatusPaused:
-		return lipgloss.Color("208")
+		return lipgloss.Color("208") // Orange
 	case types.StatusCanceled:
-		return lipgloss.Color("240")
+		return lipgloss.Color("240") // Dark gray
 	default:
-		return lipgloss.Color("240")
+		return lipgloss.Color("240") // Dark gray
+	}
+}
+
+// stageColor returns color for a specific processing stage
+func stageColor(stage types.ProcessingStage) lipgloss.Color {
+	switch stage {
+	case types.StageDownload:
+		return lipgloss.Color("33") // Blue
+	case types.StageTranscode:
+		return lipgloss.Color("51") // Cyan
+	case types.StageUpload:
+		return lipgloss.Color("42") // Green
+	case types.StageValidate:
+		return lipgloss.Color("214") // Amber
+	default:
+		return lipgloss.Color("240") // Dark gray
 	}
 }
 

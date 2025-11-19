@@ -9,6 +9,10 @@ import (
 	"transcoder/internal/version"
 )
 
+const (
+	boxPadding = 8 // Consistent padding for all boxes (borders + padding + margins)
+)
+
 // renderHeader renders the top header bar
 func (m Model) renderHeader() string {
 	title := "📹 Video Transcoder TUI"
@@ -86,8 +90,17 @@ func (m Model) renderDashboard() string {
 
 	stats := m.statistics
 
+	// Calculate consistent box widths
+	panelWidth := (m.width / 3) - boxPadding
+	if panelWidth < 35 {
+		panelWidth = 35 // Minimum width for readability
+	}
+
 	// Statistics boxes
-	statsBox := boxStyle.Render(fmt.Sprintf(
+	statsBox := boxStyle.Copy().
+		Width(panelWidth).
+		MaxWidth(panelWidth).
+		Render(fmt.Sprintf(
 		"📊 Library Statistics\n\n"+
 			"Total Files:      %d\n"+
 			"To Transcode:     %d\n"+
@@ -109,16 +122,19 @@ func (m Model) renderDashboard() string {
 	))
 
 	// Worker status
-	workerBox := boxStyle.Render(fmt.Sprintf(
-		"⚙️  Worker Status\n\n"+
-			"Active Workers:   %d\n"+
-			"Max Workers:      %d\n"+
-			"Queued Jobs:      %d\n\n"+
-			"Use [+/-] in Settings to scale workers",
-		len(m.activeJobs),
-		m.cfg.Workers.MaxWorkers,
-		len(m.queuedJobs),
-	))
+	workerBox := boxStyle.Copy().
+		Width(panelWidth).
+		MaxWidth(panelWidth).
+		Render(fmt.Sprintf(
+			"⚙️  Worker Status\n\n"+
+				"Active Workers:   %d\n"+
+				"Max Workers:      %d\n"+
+				"Queued Jobs:      %d\n\n"+
+				"Use [+/-] in Settings to scale workers",
+			len(m.activeJobs),
+			m.cfg.Workers.MaxWorkers,
+			len(m.queuedJobs),
+		))
 
 	// Active jobs
 	activeJobsStr := "🎬 Active Jobs\n\n"
@@ -162,11 +178,14 @@ func (m Model) renderDashboard() string {
 				statusColor.Render(string(job.Status)),
 				job.WorkerID,
 				sizeInfo,
-				formatProgress(job.Progress),
+				formatProgress(job.Progress, job.Stage),
 			)
 		}
 	}
-	activeBox := boxStyle.Render(activeJobsStr)
+	activeBox := boxStyle.Copy().
+		Width(panelWidth).
+		MaxWidth(panelWidth).
+		Render(activeJobsStr)
 
 	// Layout: Two columns
 	leftCol := lipgloss.JoinVertical(lipgloss.Left, statsBox, workerBox)
@@ -201,8 +220,7 @@ func (m Model) renderJobs() string {
 	}
 
 	// Each panel gets half the width minus borders and padding
-	// Border (2), Padding (4), Margin between panels (2)
-	panelWidth := (termWidth / 2) - 8
+	panelWidth := (termWidth / 2) - boxPadding
 	if panelWidth < 40 {
 		panelWidth = 40 // Minimum width
 	}
@@ -289,7 +307,7 @@ func (m Model) renderJobs() string {
 				statusColor.Render(string(job.Status)),
 				job.WorkerID,
 				sizeInfo,
-				formatProgress(job.Progress),
+				formatProgress(job.Progress, job.Stage),
 			))
 		}
 
