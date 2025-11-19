@@ -205,10 +205,14 @@ encoding:
 - **Size comparison**: Fast change detection without reading entire file
 - **Transfer verification**: Checksums calculated during download/upload
 
-### Job Recovery
+### Job Recovery & Resume
 - Jobs survive application restart
 - Orphaned jobs (downloading/transcoding/uploading) are recovered
 - Workers re-claim orphaned jobs with priority
+- **Stage skipping**: Jobs resume from where they left off:
+  - Skip download if file already exists locally
+  - Skip transcode if valid output file exists
+  - Validates existing files before skipping
 
 ### Atomic File Replacement
 1. Upload to `filename.transcoded` (temp)
