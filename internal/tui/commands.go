@@ -8,12 +8,13 @@ import (
 	"transcoder/internal/database"
 	"transcoder/internal/scanner"
 	"transcoder/internal/transcode"
+	"transcoder/internal/types"
 )
 
 // Messages
 
 type tickMsg time.Time
-type progressMsg struct{}
+type progressMsg types.ProgressUpdate
 type scanCompleteMsg struct{}
 type scanProgressMsg scanner.ScanProgress
 type errorMsg string
@@ -33,10 +34,10 @@ func listenForProgress(wp *transcode.WorkerPool) tea.Cmd {
 		// Wait for next progress update
 		progressChan := wp.GetProgressChan()
 		select {
-		case <-progressChan:
-			return progressMsg{}
+		case update := <-progressChan:
+			return progressMsg(update)
 		case <-time.After(100 * time.Millisecond):
-			return progressMsg{}
+			return progressMsg(types.ProgressUpdate{})
 		}
 	}
 }

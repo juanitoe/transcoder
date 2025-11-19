@@ -44,6 +44,7 @@ type Model struct {
 	activeJobs   []*types.TranscodeJob
 	queuedJobs   []*types.TranscodeJob
 	recentJobs   []*types.TranscodeJob
+	progressData map[int64]types.ProgressUpdate // jobID -> latest progress
 
 	// Scanner state
 	scanning     bool
@@ -92,6 +93,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 		maxLogs:        200,
 		scannerLogPath: scannerLogPath,
 		scannerLogPos:  0,
+		progressData:   make(map[int64]types.ProgressUpdate),
 	}
 	m.addLog("INFO", "Transcoder TUI started")
 	return m
@@ -141,6 +143,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case progressMsg:
 		// Handle progress update from workers
+		update := types.ProgressUpdate(msg)
+		if update.JobID > 0 {
+			m.progressData[update.JobID] = update
+		}
 		m.refreshData()
 		return m, listenForProgress(m.workerPool)
 

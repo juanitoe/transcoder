@@ -260,10 +260,10 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Stage 1: Download (skip if file already exists - recovered job)
 	if _, err := os.Stat(localInputPath); os.IsNotExist(err) {
 		w.db.UpdateJobStatus(job.ID, types.StatusDownloading, types.StageDownload, 0)
-		w.updateProgress(job.ID, types.StageDownload, 0, "Downloading")
+		w.updateProgress(job.ID, types.StageDownload, 0, "Downloading", 0, job.FileSizeBytes)
 		localInputChecksum, err = jobScanner.DownloadFileWithChecksum(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
 			progress := (float64(bytesRead) / float64(totalBytes)) * 100
-			w.updateProgress(job.ID, types.StageDownload, progress, fmt.Sprintf("Downloading: %.1f%%", progress))
+			w.updateProgress(job.ID, types.StageDownload, progress, fmt.Sprintf("Downloading: %.1f%%", progress), bytesRead, totalBytes)
 		})
 
 		if err != nil {
@@ -272,7 +272,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		}
 	} else {
 		// File already exists (recovered job), calculate checksum
-		w.updateProgress(job.ID, types.StageDownload, 100, "Download skipped (file already exists)")
+		w.updateProgress(job.ID, types.StageDownload, 100, "Download skipped (file already exists)", job.FileSizeBytes, job.FileSizeBytes)
 		result, err := checksum.CalculateFile(localInputPath)
 		if err == nil {
 			localInputChecksum = result.Hash
@@ -288,7 +288,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Stage 2: Transcode
 	w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
-	w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding")
+	w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding", 0, 0)
 
 	// Start a goroutine to periodically update file size
 	fileSizeDone := make(chan bool)
@@ -322,7 +322,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	err = w.encoder.Transcode(jobCtx, localInputPath, localOutputPath, totalFrames, func(progress TranscodeProgress) {
 		w.updateProgress(job.ID, types.StageTranscode, progress.Progress,
-			fmt.Sprintf("Transcoding: frame=%d fps=%.1f speed=%.2fx", progress.Frame, progress.FPS, progress.Speed))
+			fmt.Sprintf("Transcoding: frame=%d fps=%.1f speed=%.2fx", progress.Frame, progress.FPS, progress.Speed), 0, 0)
 	})
 
 	if err != nil {
@@ -338,7 +338,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	}
 
 	// Stage 3: Validate
-	w.updateProgress(job.ID, types.StageValidate, 0, "Validating")
+	w.updateProgress(job.ID, types.StageValidate, 0, "Validating", 0, 0)
 	if err := w.encoder.Verify(jobCtx, localOutputPath); err != nil {
 		w.db.FailJob(job.ID, fmt.Sprintf("Validation failed: %v", err))
 		return
@@ -352,7 +352,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		return
 	}
 	localOutputChecksum = result.Hash
-	w.updateProgress(job.ID, types.StageValidate, 100, "Validation passed")
+	w.updateProgress(job.ID, types.StageValidate, 100, "Validation passed", 0, 0)
 
 	// Check if cancelled
 	select {
@@ -370,13 +370,13 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Stage 4: Upload
 	w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
-	w.updateProgress(job.ID, types.StageUpload, 0, "Uploading")
+	w.updateProgress(job.ID, types.StageUpload, 0, "Uploading", 0, transcodedInfo.Size)
 
 	// Upload to temporary location first
 	remoteTempPath := job.FilePath + ".transcoded"
 	uploadedChecksum, err := jobScanner.UploadFileWithChecksum(jobCtx, localOutputPath, remoteTempPath, func(bytesWritten, totalBytes int64) {
 		progress := (float64(bytesWritten) / float64(totalBytes)) * 100
-		w.updateProgress(job.ID, types.StageUpload, progress, fmt.Sprintf("Uploading: %.1f%%", progress))
+		w.updateProgress(job.ID, types.StageUpload, progress, fmt.Sprintf("Uploading: %.1f%%", progress), bytesWritten, totalBytes)
 	})
 
 	if err != nil {
@@ -431,7 +431,7 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Complete the job with checksum information
 	w.db.CompleteJobWithChecksums(job.ID, transcodedInfo.Size, encodingTime, fps, localInputChecksum, localOutputChecksum, uploadedChecksum)
-	w.updateProgress(job.ID, types.StageUpload, 100, "Completed")
+	w.updateProgress(job.ID, types.StageUpload, 100, "Completed", transcodedInfo.Size, transcodedInfo.Size)
 
 	// Mark job as completed so cleanup doesn't delete work directory
 	jobCompleted = true
@@ -441,18 +441,20 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 }
 
 // updateProgress sends a progress update
-func (w *Worker) updateProgress(jobID int64, stage types.ProcessingStage, progress float64, message string) {
+func (w *Worker) updateProgress(jobID int64, stage types.ProcessingStage, progress float64, message string, bytesTransferred, totalBytes int64) {
 	// Update database with stage
 	w.db.UpdateJobProgress(jobID, progress, 0.0, string(stage))
 
 	// Send to progress channel
 	select {
 	case w.progressChan <- types.ProgressUpdate{
-		JobID:    jobID,
-		WorkerID: fmt.Sprintf("worker-%d", w.id),
-		Stage:    stage,
-		Progress: progress,
-		Message:  message,
+		JobID:            jobID,
+		WorkerID:         fmt.Sprintf("worker-%d", w.id),
+		Stage:            stage,
+		Progress:         progress,
+		Message:          message,
+		BytesTransferred: bytesTransferred,
+		TotalBytes:       totalBytes,
 	}:
 	default:
 		// Channel full, skip this update

@@ -128,9 +128,16 @@ func (m Model) renderDashboard() string {
 		for _, job := range m.activeJobs {
 			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
 
-			// Show file size info for transcoding jobs
+			// Show file size info based on job status
 			sizeInfo := ""
-			if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
+			if job.Status == types.StatusDownloading || job.Status == types.StatusUploading {
+				// Show bytes transferred for download/upload
+				if progress, ok := m.progressData[job.ID]; ok && progress.TotalBytes > 0 {
+					sizeInfo = fmt.Sprintf(" • %s / %s",
+						formatBytes(progress.BytesTransferred),
+						formatBytes(progress.TotalBytes))
+				}
+			} else if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
 				sizeInfo = fmt.Sprintf(" • %s / %s",
 					formatBytes(job.TranscodedFileSizeBytes),
 					formatBytes(job.FileSizeBytes))
@@ -237,9 +244,16 @@ func (m Model) renderJobs() string {
 
 			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
 
-			// Show file size info for transcoding jobs
+			// Show file size info based on job status
 			sizeInfo := ""
-			if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
+			if job.Status == types.StatusDownloading || job.Status == types.StatusUploading {
+				// Show bytes transferred for download/upload
+				if progress, ok := m.progressData[job.ID]; ok && progress.TotalBytes > 0 {
+					sizeInfo = fmt.Sprintf("  (%s / %s)",
+						formatBytes(progress.BytesTransferred),
+						formatBytes(progress.TotalBytes))
+				}
+			} else if job.Status == types.StatusTranscoding && job.TranscodedFileSizeBytes > 0 {
 				sizeInfo = fmt.Sprintf("  (%s / %s)",
 					formatBytes(job.TranscodedFileSizeBytes),
 					formatBytes(job.FileSizeBytes))
