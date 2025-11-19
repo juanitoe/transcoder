@@ -432,8 +432,8 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "left", "h", "-":
 		m.configModified = true
 		switch m.selectedSetting {
-		case 0: // Max Workers
-			if m.cfg.Workers.MaxWorkers > 1 {
+		case 0: // Max Workers (can go to 0 for wind-down before shutdown)
+			if m.cfg.Workers.MaxWorkers > 0 {
 				m.workerPool.ScaleWorkers(m.cfg.Workers.MaxWorkers - 1)
 				m.statusMsg = fmt.Sprintf("Workers: %d", m.cfg.Workers.MaxWorkers)
 			}

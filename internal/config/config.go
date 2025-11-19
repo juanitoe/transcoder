@@ -150,8 +150,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf("encoder.quality must be between 0 and 100")
 	}
 
-	if c.Workers.MaxWorkers < 1 {
-		return fmt.Errorf("workers.max_workers must be at least 1")
+	if c.Workers.MaxWorkers < 0 {
+		return fmt.Errorf("workers.max_workers cannot be negative")
 	}
 
 	return nil
