@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -46,28 +45,25 @@ type FFprobeStream struct {
 
 // ExtractMetadataWithFFprobe extracts full metadata from a video file using ffprobe
 func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath string) (*types.MediaFile, error) {
-	// Build ffprobe command
-	// We use SSH to run ffprobe on the remote server
-	// Need to properly escape the file path for the remote shell
-	sshKey := expandPath(s.cfg.Remote.SSHKey)
+	// Get an SSH client from the pool
+	sshClient := s.sshPool.get()
+	defer s.sshPool.put(sshClient)
+
+	// Create SSH session for this command
+	session, err := sshClient.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SSH session: %w", err)
+	}
+	defer session.Close()
 
 	// Escape single quotes in the path and wrap in single quotes
 	escapedPath := strings.ReplaceAll(filePath, "'", "'\\''")
 	remoteCmd := fmt.Sprintf("ffprobe -v quiet -print_format json -show_format -show_streams '%s'", escapedPath)
 
-	sshCmd := []string{
-		"ssh",
-		"-p", strconv.Itoa(s.cfg.Remote.Port),
-		"-i", sshKey,
-		fmt.Sprintf("%s@%s", s.cfg.Remote.User, s.cfg.Remote.Host),
-		remoteCmd,
-	}
-
-	s.logDebug("Running ffprobe via SSH: %v", sshCmd)
-	cmd := exec.CommandContext(ctx, sshCmd[0], sshCmd[1:]...)
+	s.logDebug("Running ffprobe via pooled SSH: %s", remoteCmd)
 
 	// Execute command
-	output, err := cmd.CombinedOutput()
+	output, err := session.CombinedOutput(remoteCmd)
 	if err != nil {
 		s.logDebug("ffprobe command failed: %v", err)
 		s.logDebug("ffprobe output: %s", string(output))

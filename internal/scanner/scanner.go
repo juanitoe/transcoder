@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bufio"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"transcoder/internal/checksum"
@@ -25,11 +27,64 @@ import (
 type Scanner struct {
 	cfg           *config.Config
 	db            *database.DB
-	sshClient     *ssh.Client
-	sftpClient    *sftp.Client
+	sshClient     *ssh.Client  // Main SSH client
+	sftpClient    *sftp.Client // Main SFTP client for directory operations
+	sshPool       *sshPool     // Pool of SSH clients for parallel FFprobe
 	progress      ScanProgress
+	progressMu    sync.Mutex   // Protects progress updates from concurrent workers
 	logFile       *os.File
+	logWriter     *bufio.Writer // Buffered writer for efficient logging
 	checksumAlgo  checksum.Algorithm // Detected remote checksum algorithm
+}
+
+// sshPool manages a pool of SSH connections for parallel operations
+type sshPool struct {
+	clients   []*ssh.Client
+	available chan *ssh.Client
+	cfg       *config.Config
+}
+
+// newSSHPool creates a new SSH connection pool
+func newSSHPool(cfg *config.Config, size int) (*sshPool, error) {
+	pool := &sshPool{
+		clients:   make([]*ssh.Client, 0, size),
+		available: make(chan *ssh.Client, size),
+		cfg:       cfg,
+	}
+
+	// Create pool of SSH clients
+	for i := 0; i < size; i++ {
+		client, err := createSSHClient(cfg)
+		if err != nil {
+			// Clean up any clients we created
+			pool.Close()
+			return nil, fmt.Errorf("failed to create SSH client %d: %w", i, err)
+		}
+		pool.clients = append(pool.clients, client)
+		pool.available <- client
+	}
+
+	return pool, nil
+}
+
+// get retrieves an available SSH client from the pool
+func (p *sshPool) get() *ssh.Client {
+	return <-p.available
+}
+
+// put returns an SSH client to the pool
+func (p *sshPool) put(client *ssh.Client) {
+	p.available <- client
+}
+
+// Close closes all SSH clients in the pool
+func (p *sshPool) Close() {
+	close(p.available)
+	for _, client := range p.clients {
+		if client != nil {
+			client.Close()
+		}
+	}
 }
 
 // workItem represents a file that needs metadata extraction
@@ -41,10 +96,12 @@ type workItem struct {
 
 // workResult represents the result of processing a work item
 type workResult struct {
-	metadata  *types.MediaFile
-	isNew     bool     // true if file is new, false if update
-	existingID int64   // ID of existing file if update
-	err       error
+	path       string
+	metadata   *types.MediaFile
+	isNew      bool     // true if file is new, false if update
+	existingID int64    // ID of existing file if update
+	size       int64    // File size for progress tracking
+	err        error
 }
 
 // New creates a new Scanner instance
@@ -71,66 +128,75 @@ func New(cfg *config.Config, db *database.DB) (*Scanner, error) {
 	}
 
 	return &Scanner{
-		cfg:     cfg,
-		db:      db,
-		logFile: logFile,
+		cfg:       cfg,
+		db:        db,
+		logFile:   logFile,
+		logWriter: bufio.NewWriter(logFile),
 	}, nil
 }
 
-// Connect establishes SSH/SFTP connection to remote server
-func (s *Scanner) Connect(ctx context.Context) error {
+// createSSHClient creates a single SSH client connection
+func createSSHClient(cfg *config.Config) (*ssh.Client, error) {
 	// Try to use SSH agent first (for passphrase-protected keys)
 	var authMethods []ssh.AuthMethod
 
 	// Try SSH agent
 	if agentConn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK")); err == nil {
 		authMethods = append(authMethods, ssh.PublicKeysCallback(agent.NewClient(agentConn).Signers))
-		s.logDebug("Using SSH agent for authentication")
 	}
 
 	// Try loading key file if agent failed or as fallback
 	if len(authMethods) == 0 {
-		keyPath := os.ExpandEnv(s.cfg.Remote.SSHKey)
+		keyPath := os.ExpandEnv(cfg.Remote.SSHKey)
 		if strings.HasPrefix(keyPath, "~/") {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return fmt.Errorf("failed to get home directory: %w", err)
+				return nil, fmt.Errorf("failed to get home directory: %w", err)
 			}
 			keyPath = filepath.Join(home, keyPath[2:])
 		}
 
-		s.logDebug("Loading SSH key from: %s", keyPath)
-
 		// Read private key
 		keyBytes, err := os.ReadFile(keyPath)
 		if err != nil {
-			return fmt.Errorf("failed to read SSH key: %w", err)
+			return nil, fmt.Errorf("failed to read SSH key: %w", err)
 		}
 
 		// Parse private key (will fail if passphrase-protected)
 		signer, err := ssh.ParsePrivateKey(keyBytes)
 		if err != nil {
-			return fmt.Errorf("failed to parse SSH key: %w (try using ssh-add to add your key to the agent)", err)
+			return nil, fmt.Errorf("failed to parse SSH key: %w (try using ssh-add to add your key to the agent)", err)
 		}
 
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
-		s.logDebug("Using SSH key file for authentication")
 	}
 
 	// Configure SSH client
 	sshConfig := &ssh.ClientConfig{
-		User: s.cfg.Remote.User,
+		User: cfg.Remote.User,
 		Auth: authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Use known_hosts
 		Timeout:         30 * time.Second,
 	}
 
 	// Connect to SSH server
-	addr := fmt.Sprintf("%s:%d", s.cfg.Remote.Host, s.cfg.Remote.Port)
-	s.logDebug("Connecting to SSH server: %s@%s", s.cfg.Remote.User, addr)
+	addr := fmt.Sprintf("%s:%d", cfg.Remote.Host, cfg.Remote.Port)
 	sshClient, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
-		return fmt.Errorf("failed to connect to SSH server: %w", err)
+		return nil, fmt.Errorf("failed to connect to SSH server: %w", err)
+	}
+
+	return sshClient, nil
+}
+
+// Connect establishes SSH/SFTP connection to remote server
+func (s *Scanner) Connect(ctx context.Context) error {
+	s.logDebug("Connecting to SSH server: %s@%s:%d", s.cfg.Remote.User, s.cfg.Remote.Host, s.cfg.Remote.Port)
+
+	// Create main SSH client
+	sshClient, err := createSSHClient(s.cfg)
+	if err != nil {
+		return err
 	}
 	s.sshClient = sshClient
 	s.logDebug("SSH connection established")
@@ -144,6 +210,21 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	}
 	s.sftpClient = sftpClient
 	s.logDebug("SFTP client created successfully")
+
+	// Create SSH connection pool for parallel FFprobe operations
+	poolSize := s.cfg.Workers.MaxWorkers
+	if poolSize <= 0 {
+		poolSize = 4 // Default
+	}
+	s.logDebug("Creating SSH connection pool with %d connections", poolSize)
+	pool, err := newSSHPool(s.cfg, poolSize)
+	if err != nil {
+		s.sftpClient.Close()
+		s.sshClient.Close()
+		return fmt.Errorf("failed to create SSH connection pool: %w", err)
+	}
+	s.sshPool = pool
+	s.logDebug("SSH connection pool created successfully")
 
 	// Detect available checksum algorithm on remote
 	s.checksumAlgo = s.detectRemoteChecksumAlgo()
@@ -177,11 +258,17 @@ func (s *Scanner) GetChecksumAlgo() checksum.Algorithm {
 
 // Close closes the SSH/SFTP connection
 func (s *Scanner) Close() error {
+	if s.sshPool != nil {
+		s.sshPool.Close()
+	}
 	if s.sftpClient != nil {
 		s.sftpClient.Close()
 	}
 	if s.sshClient != nil {
 		s.sshClient.Close()
+	}
+	if s.logWriter != nil {
+		s.logWriter.Flush() // Flush buffered logs before closing
 	}
 	if s.logFile != nil {
 		s.logFile.Close()
@@ -196,12 +283,53 @@ type ScanProgress struct {
 	FilesAdded    int
 	FilesUpdated  int
 	BytesScanned  int64
+	TotalFiles    int     // Total files discovered (for percentage calculation)
+	TotalBytes    int64   // Total bytes discovered (for percentage calculation)
 	ErrorCount    int
 	LastError     error
+	FilesPerSec   float64 // Scan rate in files/second
+	BytesPerSec   float64 // Scan rate in bytes/second
+}
+
+// progressThrottler controls how often progress updates are sent
+type progressThrottler struct {
+	lastUpdate     time.Time
+	lastFileCount  int
+	updateInterval time.Duration // Minimum time between updates
+	fileInterval   int           // Minimum files between updates
 }
 
 // ProgressCallback is called periodically during scanning
 type ProgressCallback func(progress ScanProgress)
+
+// newProgressThrottler creates a new throttler
+func newProgressThrottler() *progressThrottler {
+	return &progressThrottler{
+		lastUpdate:     time.Now(),
+		updateInterval: 2 * time.Second, // Update at most every 2 seconds
+		fileInterval:   10,               // Or every 10 files
+	}
+}
+
+// shouldUpdate returns true if we should send a progress update
+func (pt *progressThrottler) shouldUpdate(filesScanned int, force bool) bool {
+	if force {
+		return true
+	}
+
+	now := time.Now()
+	timeSinceUpdate := now.Sub(pt.lastUpdate)
+	filesSinceUpdate := filesScanned - pt.lastFileCount
+
+	// Update if enough time has passed OR enough files processed
+	if timeSinceUpdate >= pt.updateInterval || filesSinceUpdate >= pt.fileInterval {
+		pt.lastUpdate = now
+		pt.lastFileCount = filesScanned
+		return true
+	}
+
+	return false
+}
 
 // Scan scans all configured media paths and updates the database
 func (s *Scanner) Scan(ctx context.Context, progressCb ProgressCallback) error {
@@ -210,23 +338,225 @@ func (s *Scanner) Scan(ctx context.Context, progressCb ProgressCallback) error {
 	}
 
 	var totalProgress ScanProgress
+	throttler := newProgressThrottler()
+	scanStartTime := time.Now()
+
+	// Pre-scan: count total files for progress percentage
+	s.logDebug("Pre-scanning to count files...")
+	for _, mediaPath := range s.cfg.Remote.MediaPaths {
+		fileCount, byteCount := s.countFilesInPath(ctx, mediaPath)
+		totalProgress.TotalFiles += fileCount
+		totalProgress.TotalBytes += byteCount
+	}
+	s.logDebug("Found %d files (%s total)", totalProgress.TotalFiles, formatBytes(totalProgress.TotalBytes))
 
 	s.logDebug("Starting scan of %d media paths", len(s.cfg.Remote.MediaPaths))
 	for _, mediaPath := range s.cfg.Remote.MediaPaths {
 		s.logDebug("Scanning path: %s", mediaPath)
-		err := s.scanPath(ctx, mediaPath, &totalProgress, progressCb)
+		err := s.scanPath(ctx, mediaPath, &totalProgress, progressCb, throttler, scanStartTime)
 		if err != nil {
 			return fmt.Errorf("failed to scan %s: %w", mediaPath, err)
 		}
 	}
 
+	// Send final progress update and flush logs
+	s.sendProgress(&totalProgress, scanStartTime, progressCb)
+
 	s.logDebug("Scan complete - %d files scanned, %d added, %d updated",
 		totalProgress.FilesScanned, totalProgress.FilesAdded, totalProgress.FilesUpdated)
+
+	// Flush logs one more time after final log message
+	if s.logWriter != nil {
+		s.logWriter.Flush()
+	}
+
 	return nil
 }
 
-// scanPath recursively scans a single media path
-func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgress, progressCb ProgressCallback) error {
+// calculateRates computes scan rates
+func (s *Scanner) calculateRates(progress *ScanProgress, startTime time.Time) {
+	elapsed := time.Since(startTime).Seconds()
+	if elapsed > 0 {
+		progress.FilesPerSec = float64(progress.FilesScanned) / elapsed
+		progress.BytesPerSec = float64(progress.BytesScanned) / elapsed
+	}
+}
+
+// sendProgress sends progress update and flushes logs
+func (s *Scanner) sendProgress(progress *ScanProgress, startTime time.Time, progressCb ProgressCallback) {
+	s.calculateRates(progress, startTime)
+	if progressCb != nil {
+		progressCb(*progress)
+	}
+	// Flush logs periodically with progress updates
+	if s.logWriter != nil {
+		s.logWriter.Flush()
+	}
+}
+
+// worker processes work items from the work channel using pooled SSH connections
+func (s *Scanner) worker(ctx context.Context, workCh <-chan workItem, resultsCh chan<- workResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for work := range workCh {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		result := workResult{
+			path:       work.path,
+			size:       work.size,
+			isNew:      work.existingFile == nil,
+			existingID: 0,
+		}
+
+		if work.existingFile != nil {
+			result.existingID = work.existingFile.ID
+		}
+
+		// Extract metadata using pooled SSH connection
+		metadata, err := s.extractMetadata(ctx, work.path)
+		if err != nil {
+			result.err = err
+			resultsCh <- result
+			continue
+		}
+
+		result.metadata = metadata
+		resultsCh <- result
+	}
+}
+
+// scanPath recursively scans a single media path with parallel processing
+func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgress, progressCb ProgressCallback, throttler *progressThrottler, startTime time.Time) error {
+	// Create channels for work distribution
+	numWorkers := s.cfg.Workers.MaxWorkers
+	if numWorkers <= 0 {
+		numWorkers = 4
+	}
+
+	workCh := make(chan workItem, numWorkers*2)  // Buffered to avoid blocking directory walker
+	resultsCh := make(chan workResult, numWorkers*2)
+
+	// Start worker goroutines
+	var workerWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go s.worker(ctx, workCh, resultsCh, &workerWg)
+	}
+
+	// Start results processor goroutine
+	var resultsWg sync.WaitGroup
+	resultsWg.Add(1)
+	go s.processResults(ctx, resultsCh, progress, progressCb, throttler, startTime, &resultsWg)
+
+	// Walk directory tree and send work items
+	err := s.walkAndEnqueue(ctx, path, workCh, progress, progressCb, throttler, startTime)
+
+	// Close work channel (workers will finish and exit)
+	close(workCh)
+
+	// Wait for all workers to finish
+	workerWg.Wait()
+
+	// Close results channel (results processor will finish)
+	close(resultsCh)
+
+	// Wait for results processor to finish
+	resultsWg.Wait()
+
+	return err
+}
+
+// processResults processes results from workers and batches database operations
+func (s *Scanner) processResults(ctx context.Context, resultsCh <-chan workResult, progress *ScanProgress, progressCb ProgressCallback, throttler *progressThrottler, startTime time.Time, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	const batchSize = 20
+	var newFiles []*types.MediaFile
+	updatedFiles := make(map[int64]*types.MediaFile)
+
+	flushBatches := func() {
+		// Flush new files
+		if len(newFiles) > 0 {
+			s.logDebug("Batch inserting %d new files", len(newFiles))
+			ids, err := s.db.AddMediaFileBatch(newFiles)
+			if err != nil {
+				s.logDebug("Batch insert failed: %v", err)
+				s.progressMu.Lock()
+				progress.ErrorCount += len(newFiles)
+				progress.LastError = err
+				s.progressMu.Unlock()
+			} else {
+				s.progressMu.Lock()
+				progress.FilesAdded += len(ids)
+				s.progressMu.Unlock()
+			}
+			newFiles = newFiles[:0]
+		}
+
+		// Flush updated files
+		if len(updatedFiles) > 0 {
+			s.logDebug("Batch updating %d files", len(updatedFiles))
+			err := s.db.UpdateMediaFileBatch(updatedFiles)
+			if err != nil {
+				s.logDebug("Batch update failed: %v", err)
+				s.progressMu.Lock()
+				progress.ErrorCount += len(updatedFiles)
+				progress.LastError = err
+				s.progressMu.Unlock()
+			} else {
+				s.progressMu.Lock()
+				progress.FilesUpdated += len(updatedFiles)
+				s.progressMu.Unlock()
+			}
+			updatedFiles = make(map[int64]*types.MediaFile)
+		}
+	}
+
+	for result := range resultsCh {
+		if result.err != nil {
+			s.progressMu.Lock()
+			progress.ErrorCount++
+			progress.LastError = fmt.Errorf("failed to process %s: %w", result.path, result.err)
+			s.logDebug("Processing error: %v", result.err)
+			s.progressMu.Unlock()
+			continue
+		}
+
+		s.logDebug("Processed result for: %s (codec=%s)", result.path, result.metadata.Codec)
+
+		if result.isNew {
+			// Accumulate new files for batch insert
+			newFiles = append(newFiles, result.metadata)
+		} else {
+			// Accumulate updated files for batch update
+			result.metadata.ID = result.existingID
+			updatedFiles[result.existingID] = result.metadata
+		}
+
+		// Flush batches when they reach the batch size
+		if len(newFiles) >= batchSize || len(updatedFiles) >= batchSize {
+			flushBatches()
+		}
+
+		// Update progress (throttled)
+		s.progressMu.Lock()
+		if throttler.shouldUpdate(progress.FilesScanned, false) {
+			s.sendProgress(progress, startTime, progressCb)
+		}
+		s.progressMu.Unlock()
+	}
+
+	// Flush any remaining batches
+	flushBatches()
+}
+
+// walkAndEnqueue walks the directory tree and enqueues work items
+func (s *Scanner) walkAndEnqueue(ctx context.Context, path string, workCh chan<- workItem, progress *ScanProgress, progressCb ProgressCallback, throttler *progressThrottler, startTime time.Time) error {
 	// Check for cancellation
 	select {
 	case <-ctx.Done():
@@ -234,21 +564,22 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 	default:
 	}
 
-	// Update progress
+	// Update current path
+	s.progressMu.Lock()
 	progress.CurrentPath = path
-	s.progress = *progress // Store in scanner for polling
-	if progressCb != nil {
-		progressCb(*progress)
-	}
+	s.progress = *progress
+	s.progressMu.Unlock()
 
 	// List directory contents
 	entries, err := s.sftpClient.ReadDir(path)
 	if err != nil {
+		s.progressMu.Lock()
 		progress.ErrorCount++
 		progress.LastError = fmt.Errorf("failed to read directory %s: %w", path, err)
-		if progressCb != nil {
-			progressCb(*progress)
+		if throttler.shouldUpdate(progress.FilesScanned, true) {
+			s.sendProgress(progress, startTime, progressCb)
 		}
+		s.progressMu.Unlock()
 		return nil // Continue scanning other directories
 	}
 
@@ -264,89 +595,93 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 
 		if entry.IsDir() {
 			// Recursively scan subdirectory
-			if err := s.scanPath(ctx, fullPath, progress, progressCb); err != nil {
+			if err := s.walkAndEnqueue(ctx, fullPath, workCh, progress, progressCb, throttler, startTime); err != nil {
 				return err
 			}
 		} else if s.isVideoFile(entry.Name()) {
-			// Process video file
+			// Update scan counters
+			s.progressMu.Lock()
 			progress.FilesScanned++
 			progress.BytesScanned += entry.Size()
+			s.progressMu.Unlock()
+
 			fileSize := entry.Size()
 			s.logDebug("Found video file: %s (%d bytes)", fullPath, fileSize)
 
-			// Check if file exists in database FIRST (before expensive ffprobe)
+			// Check if file exists in database
 			existing, err := s.db.GetMediaFileByPath(fullPath)
 			if err != nil {
+				s.progressMu.Lock()
 				progress.ErrorCount++
 				progress.LastError = fmt.Errorf("database error for %s: %w", fullPath, err)
-				if progressCb != nil {
-					progressCb(*progress)
+				if throttler.shouldUpdate(progress.FilesScanned, true) {
+					s.sendProgress(progress, startTime, progressCb)
 				}
+				s.progressMu.Unlock()
 				continue
 			}
 
 			// Fast path: existing file with matching size - skip ffprobe entirely
 			if existing != nil && existing.FileSizeBytes == fileSize {
-				// Size matches - file unchanged, skip
-				// Note: Checksum backfilling moved to separate background phase for performance
-				if progressCb != nil {
-					progressCb(*progress)
-				}
+				// File unchanged - no work needed
 				continue
 			}
 
-			// Slow path: new file or size changed - need ffprobe
-			s.logDebug("Extracting metadata from: %s", fullPath)
-			metadata, err := s.extractMetadata(ctx, fullPath)
-			if err != nil {
-				progress.ErrorCount++
-				progress.LastError = fmt.Errorf("failed to extract metadata from %s: %w", fullPath, err)
-				s.logDebug("Metadata extraction failed: %v", err)
-				if progressCb != nil {
-					progressCb(*progress)
-				}
-				continue
-			}
-			s.logDebug("Metadata extracted successfully: codec=%s, resolution=%dx%d",
-				metadata.Codec, metadata.ResolutionWidth, metadata.ResolutionHeight)
-
-			if existing == nil {
-				// New file - add to database without checksum (will be backfilled on next scan)
-				_, err = s.db.AddMediaFile(metadata)
-				if err != nil {
-					progress.ErrorCount++
-					progress.LastError = fmt.Errorf("failed to add %s to database: %w", fullPath, err)
-					if progressCb != nil {
-						progressCb(*progress)
-					}
-					continue
-				}
-				progress.FilesAdded++
-			} else {
-				// Existing file with changed size - update metadata
-				// Note: Checksum calculation moved to separate background phase for performance
-				s.logDebug("File size changed for %s: %d -> %d", fullPath, existing.FileSizeBytes, fileSize)
-
-				metadata.ID = existing.ID
-				if err := s.db.UpdateMediaFile(existing.ID, metadata); err != nil {
-					progress.ErrorCount++
-					progress.LastError = fmt.Errorf("failed to update %s in database: %w", fullPath, err)
-					if progressCb != nil {
-						progressCb(*progress)
-					}
-					continue
-				}
-				progress.FilesUpdated++
+			// Enqueue work for parallel processing
+			work := workItem{
+				path:         fullPath,
+				size:         fileSize,
+				existingFile: existing,
 			}
 
-			// Update progress
-			if progressCb != nil {
-				progressCb(*progress)
+			select {
+			case workCh <- work:
+				s.logDebug("Enqueued work for: %s", fullPath)
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
 	}
 
 	return nil
+}
+
+// countFilesInPath recursively counts video files in a path (lightweight pre-scan)
+func (s *Scanner) countFilesInPath(ctx context.Context, path string) (int, int64) {
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return 0, 0
+	default:
+	}
+
+	var fileCount int
+	var byteCount int64
+
+	entries, err := s.sftpClient.ReadDir(path)
+	if err != nil {
+		return 0, 0 // Skip directories we can't read
+	}
+
+	for _, entry := range entries {
+		fullPath := filepath.Join(path, entry.Name())
+
+		if entry.IsDir() {
+			// Recursively count files in subdirectory
+			subFiles, subBytes := s.countFilesInPath(ctx, fullPath)
+			fileCount += subFiles
+			byteCount += subBytes
+		} else {
+			// Check if this is a video file based on extension
+			ext := strings.ToLower(filepath.Ext(entry.Name()))
+			if ext == ".mp4" || ext == ".mkv" || ext == ".avi" || ext == ".mov" || ext == ".webm" || ext == ".flv" || ext == ".wmv" || ext == ".m4v" {
+				fileCount++
+				byteCount += entry.Size()
+			}
+		}
+	}
+
+	return fileCount, byteCount
 }
 
 // BackfillChecksums calculates and updates checksums for files that are missing them
@@ -651,7 +986,7 @@ func (s *Scanner) GetProgress() ScanProgress {
 
 // logDebug writes a debug message to the log file
 func (s *Scanner) logDebug(format string, args ...interface{}) {
-	if s.logFile == nil {
+	if s.logWriter == nil {
 		return
 	}
 
@@ -659,5 +994,28 @@ func (s *Scanner) logDebug(format string, args ...interface{}) {
 	message := fmt.Sprintf(format, args...)
 	logLine := fmt.Sprintf("[%s] DEBUG: %s\n", timestamp, message)
 
-	s.logFile.WriteString(logLine)
+	s.logWriter.WriteString(logLine)
+}
+
+// formatBytes formats bytes into a human-readable string
+func formatBytes(bytes int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+		TB = 1024 * GB
+	)
+
+	switch {
+	case bytes >= TB:
+		return fmt.Sprintf("%.2f TB", float64(bytes)/float64(TB))
+	case bytes >= GB:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }

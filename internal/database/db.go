@@ -15,7 +15,8 @@ import (
 
 // DB represents the database connection
 type DB struct {
-	conn *sql.DB
+	conn               *sql.DB
+	getByPathStmt      *sql.Stmt // Prepared statement for GetMediaFileByPath
 }
 
 // New creates a new database connection and initializes the schema
@@ -67,7 +68,25 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
+	// Prepare frequently-used statements
+	if err := db.prepareStatements(); err != nil {
+		return nil, fmt.Errorf("failed to prepare statements: %w", err)
+	}
+
 	return db, nil
+}
+
+// prepareStatements prepares frequently-used SQL statements
+func (db *DB) prepareStatements() error {
+	var err error
+
+	// Prepare GetMediaFileByPath query (called once per file during scan)
+	db.getByPathStmt, err = db.conn.Prepare("SELECT * FROM media_files WHERE file_path = ?")
+	if err != nil {
+		return fmt.Errorf("failed to prepare getByPath statement: %w", err)
+	}
+
+	return nil
 }
 
 // runMigrations checks schema version and applies necessary migrations
@@ -111,6 +130,10 @@ func (db *DB) runMigrations() error {
 
 // Close closes the database connection
 func (db *DB) Close() error {
+	// Close prepared statements
+	if db.getByPathStmt != nil {
+		db.getByPathStmt.Close()
+	}
 	return db.conn.Close()
 }
 
@@ -300,7 +323,7 @@ func (db *DB) UpdateMediaFileBatch(updates map[int64]*types.MediaFile) error {
 
 // GetMediaFileByPath retrieves a media file by its path
 func (db *DB) GetMediaFileByPath(path string) (*types.MediaFile, error) {
-	row := db.conn.QueryRow("SELECT * FROM media_files WHERE file_path = ?", path)
+	row := db.getByPathStmt.QueryRow(path)
 	file, err := db.scanMediaFile(row)
 	if err == sql.ErrNoRows {
 		return nil, nil // File not found - this is not an error

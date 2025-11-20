@@ -712,18 +712,45 @@ func (m Model) renderScanner() string {
 
 	if m.scanning {
 		content += successStyle.Render("Scanning in progress...\n\n")
+
+		// Calculate progress percentage
+		progressStr := ""
+		if m.scanProgress.TotalFiles > 0 {
+			pct := float64(m.scanProgress.FilesScanned) / float64(m.scanProgress.TotalFiles) * 100
+			progressStr = fmt.Sprintf(" (%.1f%%)", pct)
+		}
+
+		// Format scan rates
+		filesRateStr := ""
+		if m.scanProgress.FilesPerSec > 0 {
+			filesRateStr = fmt.Sprintf(" • %.1f files/sec", m.scanProgress.FilesPerSec)
+		}
+		bytesRateStr := ""
+		if m.scanProgress.BytesPerSec > 0 {
+			bytesRateStr = fmt.Sprintf(" • %s/sec", formatBytes(int64(m.scanProgress.BytesPerSec)))
+		}
+
+		// Build files scanned line
+		filesLine := fmt.Sprintf("Files Scanned:    %d", m.scanProgress.FilesScanned)
+		if m.scanProgress.TotalFiles > 0 {
+			filesLine += fmt.Sprintf("/%d%s%s", m.scanProgress.TotalFiles, progressStr, filesRateStr)
+		} else if filesRateStr != "" {
+			filesLine += filesRateStr
+		}
+
 		content += fmt.Sprintf(
 			"Current Path:     %s\n"+
-				"Files Scanned:    %d\n"+
+				"%s\n"+
 				"Files Added:      %d\n"+
 				"Files Updated:    %d\n"+
-				"Bytes Scanned:    %s\n"+
+				"Bytes Scanned:    %s%s\n"+
 				"Errors:           %d\n",
 			m.scanProgress.CurrentPath,
-			m.scanProgress.FilesScanned,
+			filesLine,
 			m.scanProgress.FilesAdded,
 			m.scanProgress.FilesUpdated,
 			formatBytes(m.scanProgress.BytesScanned),
+			bytesRateStr,
 			m.scanProgress.ErrorCount,
 		)
 
