@@ -939,17 +939,21 @@ func (db *DB) GetStatistics() (*types.Statistics, error) {
 		}
 	}
 
-	// Average encoding stats
+	// Average encoding stats and size reduction
 	row = db.conn.QueryRow(`
 		SELECT
 			COALESCE(AVG(encoding_fps), 0) as avg_fps,
-			COALESCE(AVG(encoding_time_seconds), 0) as avg_time_seconds
+			COALESCE(AVG(encoding_time_seconds), 0) as avg_time_seconds,
+			COALESCE(AVG((file_size_bytes - transcoded_file_size_bytes) * 100.0 / file_size_bytes), 0) as avg_reduction
 		FROM transcode_jobs
-		WHERE status = 'completed' AND encoding_fps IS NOT NULL
+		WHERE status = 'completed'
+			AND encoding_fps IS NOT NULL
+			AND file_size_bytes > 0
+			AND transcoded_file_size_bytes > 0
 	`)
 
 	var avgTimeSeconds float64
-	if err := row.Scan(&stats.AvgEncodingFPS, &avgTimeSeconds); err != nil {
+	if err := row.Scan(&stats.AvgEncodingFPS, &avgTimeSeconds, &stats.AvgSizeReduction); err != nil {
 		return nil, err
 	}
 
