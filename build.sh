@@ -14,4 +14,7 @@ echo "  Git commit: ${GIT_COMMIT}"
 
 go build -ldflags "${LDFLAGS}" -o transcoder cmd/transcoder/main.go
 
+echo "Signing with network entitlements..."
+codesign --sign - --entitlements local-network.entitlements --force ./transcoder
+
 echo "Build complete: ./transcoder"
