@@ -1500,6 +1500,32 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedSetting++
 		}
 
+	case "+", "=":
+		// Increase max workers
+		currentWorkers := m.cfg.Workers.MaxWorkers
+		newWorkers := currentWorkers + 1
+		m.workerPool.ScaleWorkers(newWorkers)
+		m.settingsInputs[6].SetValue(fmt.Sprintf("%d", newWorkers))
+		m.configModified = true
+		m.statusMsg = fmt.Sprintf("Workers scaled to %d", newWorkers)
+		m.addLog("INFO", fmt.Sprintf("Workers scaled up to %d", newWorkers))
+		return m, nil
+
+	case "-", "_":
+		// Decrease max workers
+		currentWorkers := m.cfg.Workers.MaxWorkers
+		if currentWorkers > 0 {
+			newWorkers := currentWorkers - 1
+			m.workerPool.ScaleWorkers(newWorkers)
+			m.settingsInputs[6].SetValue(fmt.Sprintf("%d", newWorkers))
+			m.configModified = true
+			m.statusMsg = fmt.Sprintf("Workers scaled to %d", newWorkers)
+			m.addLog("INFO", fmt.Sprintf("Workers scaled down to %d", newWorkers))
+		} else {
+			m.statusMsg = "Cannot decrease workers below 0"
+		}
+		return m, nil
+
 	case "enter":
 		// Start editing the selected field
 		if m.selectedSetting == 5 {
