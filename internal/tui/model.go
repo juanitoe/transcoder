@@ -568,26 +568,27 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 		return m, nil
 
-	case "1":
-		m.viewMode = ViewDashboard
-		m.refreshData()
-		return m, nil
+	case "1", "2", "3", "4", "5":
+		// Don't switch views when editing
+		if m.isEditingSettings || m.editingPriority {
+			return m, nil
+		}
 
-	case "2":
-		m.viewMode = ViewJobs
-		m.refreshData()
-		return m, nil
-
-	case "3":
-		m.viewMode = ViewSettings
-		return m, nil
-
-	case "4":
-		m.viewMode = ViewScanner
-		return m, nil
-
-	case "5":
-		m.viewMode = ViewLogs
+		// Switch views based on number key
+		switch msg.String() {
+		case "1":
+			m.viewMode = ViewDashboard
+			m.refreshData()
+		case "2":
+			m.viewMode = ViewJobs
+			m.refreshData()
+		case "3":
+			m.viewMode = ViewSettings
+		case "4":
+			m.viewMode = ViewScanner
+		case "5":
+			m.viewMode = ViewLogs
+		}
 		return m, nil
 
 	case "r":
