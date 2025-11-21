@@ -127,6 +127,12 @@ type Model struct {
 	presetDropdownIndex        int    // Currently highlighted preset in dropdown
 	showSSHPoolSizeDropdown    bool   // Show SSH pool size dropdown menu
 	sshPoolSizeDropdownIndex   int    // Currently highlighted SSH pool size in dropdown
+	showLogLevelDropdown       bool   // Show log level dropdown menu
+	logLevelDropdownIndex      int    // Currently highlighted log level in dropdown
+	showKeepOriginalDropdown   bool   // Show keep original dropdown menu
+	keepOriginalDropdownIndex  int    // Currently highlighted keep original option in dropdown
+	showSkipChecksumDropdown   bool   // Show skip checksum dropdown menu
+	skipChecksumDropdownIndex  int    // Currently highlighted skip checksum option in dropdown
 	showSaveDiscardPrompt      bool   // Show save/discard prompt when config modified
 	saveDiscardPromptIndex     int    // Currently highlighted option (0=Save, 1=Discard)
 
@@ -178,7 +184,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 
 // initSettingsInputs initializes the textinput fields for settings
 func (m *Model) initSettingsInputs() {
-	inputs := make([]textinput.Model, 10)
+	inputs := make([]textinput.Model, 13)
 
 	// 0: Host
 	inputs[0] = textinput.New()
@@ -239,6 +245,32 @@ func (m *Model) initSettingsInputs() {
 	inputs[9].Placeholder = "Database path"
 	inputs[9].SetValue(m.cfg.Database.Path)
 	inputs[9].CharLimit = 200
+
+	// 10: Log Level
+	inputs[10] = textinput.New()
+	inputs[10].Placeholder = "Log level"
+	inputs[10].SetValue(m.cfg.Logging.Level)
+	inputs[10].CharLimit = 10
+
+	// 11: Keep Original
+	inputs[11] = textinput.New()
+	inputs[11].Placeholder = "Keep original"
+	if m.cfg.Files.KeepOriginal {
+		inputs[11].SetValue("Yes")
+	} else {
+		inputs[11].SetValue("No")
+	}
+	inputs[11].CharLimit = 3
+
+	// 12: Skip Checksum
+	inputs[12] = textinput.New()
+	inputs[12].Placeholder = "Skip checksum"
+	if m.cfg.Workers.SkipChecksumVerification {
+		inputs[12].SetValue("Yes")
+	} else {
+		inputs[12].SetValue("No")
+	}
+	inputs[12].CharLimit = 3
 
 	m.settingsInputs = inputs
 }
@@ -1377,6 +1409,41 @@ func (m *Model) applySettingValue(index int) error {
 		}
 		m.cfg.Database.Path = value
 		m.configModified = true
+
+	case 10: // Log Level
+		validLevels := []string{"debug", "info", "warn", "error"}
+		valid := false
+		for _, level := range validLevels {
+			if value == level {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("log level must be one of: debug, info, warn, error")
+		}
+		m.cfg.Logging.Level = value
+		m.configModified = true
+
+	case 11: // Keep Original
+		if value == "Yes" {
+			m.cfg.Files.KeepOriginal = true
+		} else if value == "No" {
+			m.cfg.Files.KeepOriginal = false
+		} else {
+			return fmt.Errorf("keep original must be Yes or No")
+		}
+		m.configModified = true
+
+	case 12: // Skip Checksum
+		if value == "Yes" {
+			m.cfg.Workers.SkipChecksumVerification = true
+		} else if value == "No" {
+			m.cfg.Workers.SkipChecksumVerification = false
+		} else {
+			return fmt.Errorf("skip checksum must be Yes or No")
+		}
+		m.configModified = true
 	}
 
 	return nil
@@ -1405,6 +1472,20 @@ func (m *Model) revertSettingValue(index int) {
 		m.settingsInputs[index].SetValue(m.cfg.Workers.WorkDir)
 	case 9:
 		m.settingsInputs[index].SetValue(m.cfg.Database.Path)
+	case 10:
+		m.settingsInputs[index].SetValue(m.cfg.Logging.Level)
+	case 11:
+		if m.cfg.Files.KeepOriginal {
+			m.settingsInputs[index].SetValue("Yes")
+		} else {
+			m.settingsInputs[index].SetValue("No")
+		}
+	case 12:
+		if m.cfg.Workers.SkipChecksumVerification {
+			m.settingsInputs[index].SetValue("Yes")
+		} else {
+			m.settingsInputs[index].SetValue("No")
+		}
 	}
 }
 
@@ -1445,6 +1526,102 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Cancel prompt
 			m.showSaveDiscardPrompt = false
 			m.statusMsg = ""
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Handle log level dropdown navigation
+	if m.showLogLevelDropdown {
+		levels := []string{"debug", "info", "warn", "error"}
+		switch msg.String() {
+		case "up", "k":
+			if m.logLevelDropdownIndex > 0 {
+				m.logLevelDropdownIndex--
+			}
+			return m, nil
+		case "down", "j":
+			if m.logLevelDropdownIndex < len(levels)-1 {
+				m.logLevelDropdownIndex++
+			}
+			return m, nil
+		case "enter":
+			// Select the highlighted log level
+			m.cfg.Logging.Level = levels[m.logLevelDropdownIndex]
+			m.settingsInputs[10].SetValue(levels[m.logLevelDropdownIndex])
+			m.showLogLevelDropdown = false
+			m.isEditingSettings = false
+			m.configModified = true
+			m.statusMsg = fmt.Sprintf("Log level set to: %s", levels[m.logLevelDropdownIndex])
+			return m, nil
+		case "esc":
+			// Cancel dropdown
+			m.showLogLevelDropdown = false
+			m.isEditingSettings = false
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Handle keep original dropdown navigation
+	if m.showKeepOriginalDropdown {
+		options := []string{"No", "Yes"}
+		switch msg.String() {
+		case "up", "k":
+			if m.keepOriginalDropdownIndex > 0 {
+				m.keepOriginalDropdownIndex--
+			}
+			return m, nil
+		case "down", "j":
+			if m.keepOriginalDropdownIndex < len(options)-1 {
+				m.keepOriginalDropdownIndex++
+			}
+			return m, nil
+		case "enter":
+			// Select the highlighted option
+			m.cfg.Files.KeepOriginal = (m.keepOriginalDropdownIndex == 1)
+			m.settingsInputs[11].SetValue(options[m.keepOriginalDropdownIndex])
+			m.showKeepOriginalDropdown = false
+			m.isEditingSettings = false
+			m.configModified = true
+			m.statusMsg = fmt.Sprintf("Keep original set to: %s", options[m.keepOriginalDropdownIndex])
+			return m, nil
+		case "esc":
+			// Cancel dropdown
+			m.showKeepOriginalDropdown = false
+			m.isEditingSettings = false
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Handle skip checksum dropdown navigation
+	if m.showSkipChecksumDropdown {
+		options := []string{"No", "Yes"}
+		switch msg.String() {
+		case "up", "k":
+			if m.skipChecksumDropdownIndex > 0 {
+				m.skipChecksumDropdownIndex--
+			}
+			return m, nil
+		case "down", "j":
+			if m.skipChecksumDropdownIndex < len(options)-1 {
+				m.skipChecksumDropdownIndex++
+			}
+			return m, nil
+		case "enter":
+			// Select the highlighted option
+			m.cfg.Workers.SkipChecksumVerification = (m.skipChecksumDropdownIndex == 1)
+			m.settingsInputs[12].SetValue(options[m.skipChecksumDropdownIndex])
+			m.showSkipChecksumDropdown = false
+			m.isEditingSettings = false
+			m.configModified = true
+			m.statusMsg = fmt.Sprintf("Skip checksum set to: %s", options[m.skipChecksumDropdownIndex])
+			return m, nil
+		case "esc":
+			// Cancel dropdown
+			m.showSkipChecksumDropdown = false
+			m.isEditingSettings = false
 			return m, nil
 		}
 		return m, nil
@@ -1555,7 +1732,7 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.selectedSetting < 9 { // 10 editable settings (0-9)
+		if m.selectedSetting < 12 { // 13 editable settings (0-12)
 			m.selectedSetting++
 		}
 
@@ -1610,6 +1787,47 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.presetDropdownIndex = i
 					break
 				}
+			}
+			return m, nil
+		} else if m.selectedSetting == 10 {
+			// Log Level field - show dropdown instead
+			m.isEditingSettings = true
+			m.showLogLevelDropdown = true
+			m.validationError = ""
+
+			// Find current log level index
+			levels := []string{"debug", "info", "warn", "error"}
+			for i, level := range levels {
+				if level == m.cfg.Logging.Level {
+					m.logLevelDropdownIndex = i
+					break
+				}
+			}
+			return m, nil
+		} else if m.selectedSetting == 11 {
+			// Keep Original field - show dropdown instead
+			m.isEditingSettings = true
+			m.showKeepOriginalDropdown = true
+			m.validationError = ""
+
+			// Set current value (0=No, 1=Yes)
+			if m.cfg.Files.KeepOriginal {
+				m.keepOriginalDropdownIndex = 1
+			} else {
+				m.keepOriginalDropdownIndex = 0
+			}
+			return m, nil
+		} else if m.selectedSetting == 12 {
+			// Skip Checksum field - show dropdown instead
+			m.isEditingSettings = true
+			m.showSkipChecksumDropdown = true
+			m.validationError = ""
+
+			// Set current value (0=No, 1=Yes)
+			if m.cfg.Workers.SkipChecksumVerification {
+				m.skipChecksumDropdownIndex = 1
+			} else {
+				m.skipChecksumDropdownIndex = 0
 			}
 			return m, nil
 		} else {

@@ -454,6 +454,9 @@ func (m Model) renderSettings() string {
 		"Max Workers:   ",
 		"Work Directory:",
 		"Database Path: ",
+		"Log Level:     ",
+		"Keep Original: ",
+		"Skip Checksum: ",
 	}
 
 	// Remote Configuration
@@ -553,6 +556,48 @@ func (m Model) renderSettings() string {
 	}
 	content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
 
+	// Application Settings
+	content += "\nApplication Settings:\n"
+	for i := 10; i < 13; i++ {
+		prefix := "  "
+		if i == m.selectedSetting {
+			// Don't show editing prefix if dropdown is open
+			dropdownOpen := (i == 10 && m.showLogLevelDropdown) ||
+				(i == 11 && m.showKeepOriginalDropdown) ||
+				(i == 12 && m.showSkipChecksumDropdown)
+			if m.isEditingSettings && !dropdownOpen {
+				prefix = editingStyle.Render("▶ ")
+			} else {
+				prefix = selectedStyle.Render("▶ ")
+			}
+		} else {
+			prefix = "  "
+		}
+
+		label := labelStyle.Render(settingNames[i])
+		value := m.settingsInputs[i].Value()
+		if i == m.selectedSetting && m.isEditingSettings {
+			dropdownOpen := (i == 10 && m.showLogLevelDropdown) ||
+				(i == 11 && m.showKeepOriginalDropdown) ||
+				(i == 12 && m.showSkipChecksumDropdown)
+			if !dropdownOpen {
+				value = m.settingsInputs[i].View()
+			}
+		}
+		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+
+		// Show dropdown after each field if active
+		if i == 10 && m.showLogLevelDropdown {
+			content += m.renderLogLevelDropdown()
+		}
+		if i == 11 && m.showKeepOriginalDropdown {
+			content += m.renderKeepOriginalDropdown()
+		}
+		if i == 12 && m.showSkipChecksumDropdown {
+			content += m.renderSkipChecksumDropdown()
+		}
+	}
+
 	// Validation error
 	if m.validationError != "" {
 		content += "\n" + errorStyle.Render(fmt.Sprintf("⚠ %s", m.validationError))
@@ -563,7 +608,7 @@ func (m Model) renderSettings() string {
 	if m.showSaveDiscardPrompt {
 		// Show save/discard prompt
 		content += m.renderSaveDiscardPrompt()
-	} else if m.showSSHPoolSizeDropdown || m.showPresetDropdown {
+	} else if m.showSSHPoolSizeDropdown || m.showPresetDropdown || m.showLogLevelDropdown || m.showKeepOriginalDropdown || m.showSkipChecksumDropdown {
 		// Help text is shown in the dropdown itself
 	} else if m.isEditingSettings {
 		content += helpStyle.Render("[Enter] Save • [Esc] Cancel")
@@ -630,6 +675,146 @@ func (m Model) renderSSHPoolSizeDropdown() string {
 		} else {
 			line = itemStyle.Render(fmt.Sprintf("   %2d ", i))
 			line += " " + descStyle.Render(desc)
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
+}
+
+// renderLogLevelDropdown renders a visual dropdown menu for log level
+func (m Model) renderLogLevelDropdown() string {
+	levels := []string{"debug", "info", "warn", "error"}
+	descriptions := []string{
+		"Detailed debugging information",
+		"General informational messages",
+		"Warning messages for potential issues",
+		"Error messages only",
+	}
+
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	for i, level := range levels {
+		var line string
+		if i == m.logLevelDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-8s ", level))
+			line += " " + descStyle.Render(descriptions[i])
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %-8s ", level))
+			line += " " + descStyle.Render(descriptions[i])
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
+}
+
+// renderKeepOriginalDropdown renders a visual dropdown menu for keep original setting
+func (m Model) renderKeepOriginalDropdown() string {
+	options := []string{"No", "Yes"}
+	descriptions := []string{
+		"Delete original file after successful transcode",
+		"Keep original file (move to backup location)",
+	}
+
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	for i, option := range options {
+		var line string
+		if i == m.keepOriginalDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-4s ", option))
+			line += " " + descStyle.Render(descriptions[i])
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %-4s ", option))
+			line += " " + descStyle.Render(descriptions[i])
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
+}
+
+// renderSkipChecksumDropdown renders a visual dropdown menu for skip checksum setting
+func (m Model) renderSkipChecksumDropdown() string {
+	options := []string{"No", "Yes"}
+	descriptions := []string{
+		"Verify file integrity with checksums (safer)",
+		"Skip checksum verification (faster but less safe)",
+	}
+
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	for i, option := range options {
+		var line string
+		if i == m.skipChecksumDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-4s ", option))
+			line += " " + descStyle.Render(descriptions[i])
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %-4s ", option))
+			line += " " + descStyle.Render(descriptions[i])
 		}
 		dropdown += line + "\n"
 	}
