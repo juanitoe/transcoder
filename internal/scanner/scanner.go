@@ -219,9 +219,10 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	s.logDebug("Creating SFTP client")
 	var sftpClient *sftp.Client
 	if s.cfg.Remote.SFTPBufferSize > 0 && s.cfg.Remote.SFTPBufferSize != 32768 {
-		// Use custom buffer size
+		// Use custom buffer size (unchecked for larger sizes)
+		// MaxPacketUnchecked allows sizes > 32KB for trusted servers
 		sftpClient, err = sftp.NewClient(sshClient,
-			sftp.MaxPacket(s.cfg.Remote.SFTPBufferSize))
+			sftp.MaxPacketUnchecked(s.cfg.Remote.SFTPBufferSize))
 		s.logDebug("SFTP client created with buffer size: %d bytes", s.cfg.Remote.SFTPBufferSize)
 	} else {
 		// Use default buffer size
