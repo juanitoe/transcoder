@@ -19,11 +19,12 @@ type Config struct {
 
 // RemoteConfig contains remote server settings
 type RemoteConfig struct {
-	Host       string   `yaml:"host"`
-	User       string   `yaml:"user"`
-	SSHKey     string   `yaml:"ssh_key"`
-	MediaPaths []string `yaml:"media_paths"`
-	Port       int      `yaml:"port"` // Default 22
+	Host        string   `yaml:"host"`
+	User        string   `yaml:"user"`
+	SSHKey      string   `yaml:"ssh_key"`
+	MediaPaths  []string `yaml:"media_paths"`
+	Port        int      `yaml:"port"`         // Default 22
+	SSHPoolSize int      `yaml:"ssh_pool_size"` // SSH connection pool size per worker (default 4)
 }
 
 // EncoderConfig contains video encoding settings
@@ -91,6 +92,10 @@ func (c *Config) applyDefaults() {
 		c.Remote.Port = 22
 	}
 
+	if c.Remote.SSHPoolSize == 0 {
+		c.Remote.SSHPoolSize = 4
+	}
+
 	if c.Encoder.Codec == "" {
 		c.Encoder.Codec = "hevc_videotoolbox"
 	}
@@ -152,6 +157,10 @@ func (c *Config) validate() error {
 
 	if c.Workers.MaxWorkers < 0 {
 		return fmt.Errorf("workers.max_workers cannot be negative")
+	}
+
+	if c.Remote.SSHPoolSize < 1 || c.Remote.SSHPoolSize > 16 {
+		return fmt.Errorf("remote.ssh_pool_size must be between 1 and 16")
 	}
 
 	return nil

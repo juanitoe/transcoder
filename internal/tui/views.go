@@ -448,6 +448,7 @@ func (m Model) renderSettings() string {
 		"User:          ",
 		"Port:          ",
 		"SSH Key:       ",
+		"SSH Pool Size: ",
 		"Quality:       ",
 		"Preset:        ",
 		"Max Workers:   ",
@@ -457,7 +458,7 @@ func (m Model) renderSettings() string {
 
 	// Remote Configuration
 	content += "Remote Configuration:\n"
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		prefix := "  "
 		if i == m.selectedSetting {
 			if m.isEditingSettings {
@@ -480,7 +481,7 @@ func (m Model) renderSettings() string {
 	// Encoder Settings
 	content += "\nEncoder Settings:\n"
 	content += fmt.Sprintf("  %s %s (fixed)\n", labelStyle.Render("Codec:         "), m.cfg.Encoder.Codec)
-	for i := 4; i < 6; i++ {
+	for i := 5; i < 7; i++ {
 		prefix := "  "
 		if i == m.selectedSetting {
 			if m.isEditingSettings && !m.showPresetDropdown {
@@ -500,14 +501,14 @@ func (m Model) renderSettings() string {
 		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
 
 		// Show dropdown after Preset field if active
-		if i == 5 && m.showPresetDropdown {
+		if i == 6 && m.showPresetDropdown {
 			content += m.renderPresetDropdown()
 		}
 	}
 
 	// Worker Configuration
 	content += "\nWorker Configuration:\n"
-	for i := 6; i < 8; i++ {
+	for i := 7; i < 9; i++ {
 		prefix := "  "
 		if i == m.selectedSetting {
 			if m.isEditingSettings {
@@ -529,7 +530,7 @@ func (m Model) renderSettings() string {
 
 	// Database
 	content += "\nDatabase:\n"
-	i := 8
+	i := 9
 	prefix := "  "
 	if i == m.selectedSetting {
 		if m.isEditingSettings {

@@ -212,10 +212,9 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	s.logDebug("SFTP client created successfully")
 
 	// Create SSH connection pool for parallel FFprobe operations
-	poolSize := s.cfg.Workers.MaxWorkers
-	if poolSize <= 0 {
-		poolSize = 4 // Default
-	}
+	// Use a configurable pool size per scanner to avoid overwhelming SSH server
+	// when multiple workers are active (e.g., 16 workers × 16 connections = 256 connections!)
+	poolSize := s.cfg.Remote.SSHPoolSize
 	s.logDebug("Creating SSH connection pool with %d connections", poolSize)
 	pool, err := newSSHPool(s.cfg, poolSize)
 	if err != nil {

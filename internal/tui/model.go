@@ -176,7 +176,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 
 // initSettingsInputs initializes the textinput fields for settings
 func (m *Model) initSettingsInputs() {
-	inputs := make([]textinput.Model, 9)
+	inputs := make([]textinput.Model, 10)
 
 	// 0: Host
 	inputs[0] = textinput.New()
@@ -202,35 +202,41 @@ func (m *Model) initSettingsInputs() {
 	inputs[3].SetValue(m.cfg.Remote.SSHKey)
 	inputs[3].CharLimit = 200
 
-	// 4: Quality
+	// 4: SSH Pool Size
 	inputs[4] = textinput.New()
-	inputs[4].Placeholder = "Quality (0-100)"
-	inputs[4].SetValue(fmt.Sprintf("%d", m.cfg.Encoder.Quality))
-	inputs[4].CharLimit = 3
+	inputs[4].Placeholder = "SSH pool size (1-16)"
+	inputs[4].SetValue(fmt.Sprintf("%d", m.cfg.Remote.SSHPoolSize))
+	inputs[4].CharLimit = 2
 
-	// 5: Preset
+	// 5: Quality
 	inputs[5] = textinput.New()
-	inputs[5].Placeholder = "Encoder preset"
-	inputs[5].SetValue(m.cfg.Encoder.Preset)
-	inputs[5].CharLimit = 20
+	inputs[5].Placeholder = "Quality (0-100)"
+	inputs[5].SetValue(fmt.Sprintf("%d", m.cfg.Encoder.Quality))
+	inputs[5].CharLimit = 3
 
-	// 6: Max Workers
+	// 6: Preset
 	inputs[6] = textinput.New()
-	inputs[6].Placeholder = "Max workers"
-	inputs[6].SetValue(fmt.Sprintf("%d", m.cfg.Workers.MaxWorkers))
-	inputs[6].CharLimit = 3
+	inputs[6].Placeholder = "Encoder preset"
+	inputs[6].SetValue(m.cfg.Encoder.Preset)
+	inputs[6].CharLimit = 20
 
-	// 7: Work Directory
+	// 7: Max Workers
 	inputs[7] = textinput.New()
-	inputs[7].Placeholder = "Work directory"
-	inputs[7].SetValue(m.cfg.Workers.WorkDir)
-	inputs[7].CharLimit = 200
+	inputs[7].Placeholder = "Max workers"
+	inputs[7].SetValue(fmt.Sprintf("%d", m.cfg.Workers.MaxWorkers))
+	inputs[7].CharLimit = 3
 
-	// 8: Database Path
+	// 8: Work Directory
 	inputs[8] = textinput.New()
-	inputs[8].Placeholder = "Database path"
-	inputs[8].SetValue(m.cfg.Database.Path)
+	inputs[8].Placeholder = "Work directory"
+	inputs[8].SetValue(m.cfg.Workers.WorkDir)
 	inputs[8].CharLimit = 200
+
+	// 9: Database Path
+	inputs[9] = textinput.New()
+	inputs[9].Placeholder = "Database path"
+	inputs[9].SetValue(m.cfg.Database.Path)
+	inputs[9].CharLimit = 200
 
 	m.settingsInputs = inputs
 }
@@ -1301,7 +1307,18 @@ func (m *Model) applySettingValue(index int) error {
 		m.cfg.Remote.SSHKey = value
 		m.configModified = true
 
-	case 4: // Quality
+	case 4: // SSH Pool Size
+		var poolSize int
+		if _, err := fmt.Sscanf(value, "%d", &poolSize); err != nil {
+			return fmt.Errorf("SSH pool size must be a number")
+		}
+		if poolSize < 1 || poolSize > 16 {
+			return fmt.Errorf("SSH pool size must be between 1 and 16")
+		}
+		m.cfg.Remote.SSHPoolSize = poolSize
+		m.configModified = true
+
+	case 5: // Quality
 		var quality int
 		if _, err := fmt.Sscanf(value, "%d", &quality); err != nil {
 			return fmt.Errorf("quality must be a number")
@@ -1312,7 +1329,7 @@ func (m *Model) applySettingValue(index int) error {
 		m.cfg.Encoder.Quality = quality
 		m.configModified = true
 
-	case 5: // Preset
+	case 6: // Preset
 		validPresets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
 		valid := false
 		for _, p := range validPresets {
@@ -1327,7 +1344,7 @@ func (m *Model) applySettingValue(index int) error {
 		m.cfg.Encoder.Preset = value
 		m.configModified = true
 
-	case 6: // Max Workers
+	case 7: // Max Workers
 		var workers int
 		if _, err := fmt.Sscanf(value, "%d", &workers); err != nil {
 			return fmt.Errorf("max workers must be a number")
@@ -1339,14 +1356,14 @@ func (m *Model) applySettingValue(index int) error {
 		m.workerPool.ScaleWorkers(workers)
 		m.configModified = true
 
-	case 7: // Work Directory
+	case 8: // Work Directory
 		if value == "" {
 			return fmt.Errorf("work directory cannot be empty")
 		}
 		m.cfg.Workers.WorkDir = value
 		m.configModified = true
 
-	case 8: // Database Path
+	case 9: // Database Path
 		if value == "" {
 			return fmt.Errorf("database path cannot be empty")
 		}
@@ -1369,14 +1386,16 @@ func (m *Model) revertSettingValue(index int) {
 	case 3:
 		m.settingsInputs[index].SetValue(m.cfg.Remote.SSHKey)
 	case 4:
-		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Encoder.Quality))
+		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Remote.SSHPoolSize))
 	case 5:
-		m.settingsInputs[index].SetValue(m.cfg.Encoder.Preset)
+		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Encoder.Quality))
 	case 6:
-		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Workers.MaxWorkers))
+		m.settingsInputs[index].SetValue(m.cfg.Encoder.Preset)
 	case 7:
-		m.settingsInputs[index].SetValue(m.cfg.Workers.WorkDir)
+		m.settingsInputs[index].SetValue(fmt.Sprintf("%d", m.cfg.Workers.MaxWorkers))
 	case 8:
+		m.settingsInputs[index].SetValue(m.cfg.Workers.WorkDir)
+	case 9:
 		m.settingsInputs[index].SetValue(m.cfg.Database.Path)
 	}
 }
