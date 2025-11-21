@@ -173,10 +173,10 @@ func createSSHClient(cfg *config.Config) (*ssh.Client, error) {
 
 	// Configure SSH client
 	sshConfig := &ssh.ClientConfig{
-		User: cfg.Remote.User,
-		Auth: authMethods,
+		User:            cfg.Remote.User,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Use known_hosts
-		Timeout:         30 * time.Second,
+		Timeout:         time.Duration(cfg.Remote.SSHTimeout) * time.Second,
 	}
 
 	// Connect to SSH server
@@ -184,6 +184,20 @@ func createSSHClient(cfg *config.Config) (*ssh.Client, error) {
 	sshClient, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to SSH server: %w", err)
+	}
+
+	// Set up keepalive if configured
+	if cfg.Remote.SSHKeepalive > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Duration(cfg.Remote.SSHKeepalive) * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				_, _, err := sshClient.SendRequest("keepalive@openssh.com", true, nil)
+				if err != nil {
+					return // Connection closed
+				}
+			}
+		}()
 	}
 
 	return sshClient, nil
@@ -201,9 +215,19 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	s.sshClient = sshClient
 	s.logDebug("SSH connection established")
 
-	// Create SFTP client
+	// Create SFTP client with optional buffer size configuration
 	s.logDebug("Creating SFTP client")
-	sftpClient, err := sftp.NewClient(sshClient)
+	var sftpClient *sftp.Client
+	if s.cfg.Remote.SFTPBufferSize > 0 && s.cfg.Remote.SFTPBufferSize != 32768 {
+		// Use custom buffer size
+		sftpClient, err = sftp.NewClient(sshClient,
+			sftp.MaxPacket(s.cfg.Remote.SFTPBufferSize))
+		s.logDebug("SFTP client created with buffer size: %d bytes", s.cfg.Remote.SFTPBufferSize)
+	} else {
+		// Use default buffer size
+		sftpClient, err = sftp.NewClient(sshClient)
+		s.logDebug("SFTP client created with default buffer size")
+	}
 	if err != nil {
 		s.sshClient.Close()
 		return fmt.Errorf("failed to create SFTP client: %w", err)
@@ -597,7 +621,7 @@ func (s *Scanner) walkAndEnqueue(ctx context.Context, path string, workCh chan<-
 			if err := s.walkAndEnqueue(ctx, fullPath, workCh, progress, progressCb, throttler, startTime); err != nil {
 				return err
 			}
-		} else if s.isVideoFile(entry.Name()) {
+		} else if s.isVideoFile(entry.Name()) && s.shouldProcessFile(fullPath, entry.Size()) {
 			// Update scan counters
 			s.progressMu.Lock()
 			progress.FilesScanned++
@@ -671,9 +695,8 @@ func (s *Scanner) countFilesInPath(ctx context.Context, path string) (int, int64
 			fileCount += subFiles
 			byteCount += subBytes
 		} else {
-			// Check if this is a video file based on extension
-			ext := strings.ToLower(filepath.Ext(entry.Name()))
-			if ext == ".mp4" || ext == ".mkv" || ext == ".avi" || ext == ".mov" || ext == ".webm" || ext == ".flv" || ext == ".wmv" || ext == ".m4v" {
+			// Check if this is a video file we should process
+			if s.isVideoFile(entry.Name()) && s.shouldProcessFile(fullPath, entry.Size()) {
 				fileCount++
 				byteCount += entry.Size()
 			}
@@ -742,17 +765,44 @@ func (s *Scanner) BackfillChecksums(ctx context.Context, progressCb ProgressCall
 // isVideoFile checks if a file has a video extension
 func (s *Scanner) isVideoFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	videoExts := []string{
-		".mp4", ".mkv", ".avi", ".mov", ".m4v",
-		".wmv", ".flv", ".webm", ".mpg", ".mpeg",
-		".m2ts", ".ts", ".vob", ".ogv", ".3gp",
+	// Remove leading dot from extension for comparison
+	if len(ext) > 0 && ext[0] == '.' {
+		ext = ext[1:]
 	}
-	for _, videoExt := range videoExts {
-		if ext == videoExt {
+
+	// Use configured extensions
+	for _, configExt := range s.cfg.Files.Extensions {
+		// Normalize config extension (remove leading dot if present)
+		normalizedExt := strings.ToLower(configExt)
+		if len(normalizedExt) > 0 && normalizedExt[0] == '.' {
+			normalizedExt = normalizedExt[1:]
+		}
+		if ext == normalizedExt {
 			return true
 		}
 	}
 	return false
+}
+
+// shouldProcessFile checks if a file should be processed based on size and exclude patterns
+func (s *Scanner) shouldProcessFile(filePath string, fileSize int64) bool {
+	// Check minimum file size
+	if s.cfg.Files.MinSizeBytes > 0 && fileSize < s.cfg.Files.MinSizeBytes {
+		return false
+	}
+
+	// Check exclude patterns
+	for _, pattern := range s.cfg.Files.ExcludePatterns {
+		if matched, _ := filepath.Match(pattern, filepath.Base(filePath)); matched {
+			return false
+		}
+		// Also try matching against full path for directory patterns
+		if matched, _ := filepath.Match(pattern, filePath); matched {
+			return false
+		}
+	}
+
+	return true
 }
 
 // extractMetadata extracts video metadata from a remote file using ffprobe

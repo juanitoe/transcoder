@@ -455,10 +455,16 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Verify upload checksum matches local output checksum
 	if uploadedChecksum != localOutputChecksum {
-		logging.Error("[%s] Job %d failed: Upload checksum mismatch: expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
-		w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum))
-		jobScanner.DeleteRemoteFile(remoteTempPath)
-		return
+		if w.cfg.Workers.SkipChecksumVerification {
+			// Log warning but continue (skip verification)
+			logging.Warn("[%s] Job %d: Upload checksum mismatch (verification skipped): expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
+		} else {
+			// Fail job on checksum mismatch
+			logging.Error("[%s] Job %d failed: Upload checksum mismatch: expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
+			w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum))
+			jobScanner.DeleteRemoteFile(remoteTempPath)
+			return
+		}
 	}
 
 	// Check if cancelled
@@ -471,20 +477,43 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	}
 
 	// Replace original file with transcoded file atomically
-	// First delete the original
-	if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
-		logging.Error("[%s] Job %d failed: Failed to delete original file: %v", workerID, job.ID, err)
-		w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
-		jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
-		return
-	}
+	if w.cfg.Files.KeepOriginal {
+		// Keep original file by renaming it to .original
+		originalBackupPath := job.FilePath + ".original"
+		if err := jobScanner.RenameRemoteFile(job.FilePath, originalBackupPath); err != nil {
+			logging.Error("[%s] Job %d failed: Failed to backup original file: %v", workerID, job.ID, err)
+			w.db.FailJob(job.ID, fmt.Sprintf("Failed to backup original file: %v", err))
+			jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+			return
+		}
 
-	// Rename transcoded file to original name (atomic operation)
-	if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
-		logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
-		w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
-		jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
-		return
+		// Rename transcoded file to original name (atomic operation)
+		if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
+			logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
+			w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
+			// Try to restore original from backup
+			jobScanner.RenameRemoteFile(originalBackupPath, job.FilePath)
+			jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+			return
+		}
+
+		logging.Info("[%s] Job %d: Original file kept as backup: %s", workerID, job.ID, originalBackupPath)
+	} else {
+		// Delete original file and replace with transcoded
+		if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
+			logging.Error("[%s] Job %d failed: Failed to delete original file: %v", workerID, job.ID, err)
+			w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
+			jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+			return
+		}
+
+		// Rename transcoded file to original name (atomic operation)
+		if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
+			logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
+			w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
+			jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+			return
+		}
 	}
 
 	// Note: We skip final remote checksum verification because:
