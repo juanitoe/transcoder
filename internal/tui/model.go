@@ -119,14 +119,16 @@ type Model struct {
 	configModified bool
 
 	// Settings editing
-	isEditingSettings      bool
-	settingsInputs         []textinput.Model
-	validationError        string
-	configPath             string // Path to save config
-	showPresetDropdown     bool   // Show preset dropdown menu
-	presetDropdownIndex    int    // Currently highlighted preset in dropdown
-	showSaveDiscardPrompt  bool   // Show save/discard prompt when config modified
-	saveDiscardPromptIndex int    // Currently highlighted option (0=Save, 1=Discard)
+	isEditingSettings          bool
+	settingsInputs             []textinput.Model
+	validationError            string
+	configPath                 string // Path to save config
+	showPresetDropdown         bool   // Show preset dropdown menu
+	presetDropdownIndex        int    // Currently highlighted preset in dropdown
+	showSSHPoolSizeDropdown    bool   // Show SSH pool size dropdown menu
+	sshPoolSizeDropdownIndex   int    // Currently highlighted SSH pool size in dropdown
+	showSaveDiscardPrompt      bool   // Show save/discard prompt when config modified
+	saveDiscardPromptIndex     int    // Currently highlighted option (0=Save, 1=Discard)
 
 	// Job actions
 	showJobActionDropdown  bool // Show job action dropdown menu
@@ -851,7 +853,7 @@ func (m Model) calculateJobIndexFromClick(clickY int) int {
 // calculateSettingIndexFromClick calculates which setting was clicked based on Y position
 func (m Model) calculateSettingIndexFromClick(clickY int) int {
 	// Settings layout: header(0), status(1), empty(2), box_border(3), title(4), empty(5)
-	// Then dynamically: Remote Config header, 4 settings, Encoder header, Codec (fixed), 2 settings, Worker header, 2 settings, Database header, 1 setting
+	// Then dynamically: Remote Config header, 5 settings, Encoder header, Codec (fixed), 2 settings, Worker header, 2 settings, Database header, 1 setting
 
 	// Calculate starting Y position
 	// header(0) + status(1) + empty(2) + box_border(3) + title(4) + empty(5) = 6
@@ -860,12 +862,18 @@ func (m Model) calculateSettingIndexFromClick(clickY int) int {
 	// Remote Configuration header
 	currentY++ // "Remote Configuration:"
 
-	// Remote settings (0-3): Host, User, Port, SSH Key
-	for i := 0; i < 4; i++ {
+	// Remote settings (0-4): Host, User, Port, SSH Key, SSH Pool Size
+	for i := 0; i < 5; i++ {
 		if clickY == currentY {
 			return i
 		}
 		currentY++
+
+		// If SSH pool size dropdown is showing and we're on SSH Pool Size field, skip dropdown lines
+		if i == 4 && m.showSSHPoolSizeDropdown {
+			// Dropdown has 16 items + help line + borders = ~19 lines
+			currentY += 19
+		}
 	}
 
 	// Empty line + Encoder Settings header
@@ -875,18 +883,18 @@ func (m Model) calculateSettingIndexFromClick(clickY int) int {
 	// Codec (fixed, not clickable)
 	currentY++
 
-	// Encoder settings (4-5): Quality, Preset
-	for i := 4; i < 6; i++ {
+	// Encoder settings (5-6): Quality, Preset
+	for i := 5; i < 7; i++ {
 		if clickY == currentY {
 			return i
 		}
 		currentY++
 
 		// If preset dropdown is showing and we're on Preset field, skip dropdown lines
-		if i == 5 && m.showPresetDropdown {
+		if i == 6 && m.showPresetDropdown {
 			// Dropdown has variable height, skip it
-			// Approximate: 1 empty + 5 presets + 1 help = 7 lines + borders = ~9 lines
-			currentY += 9
+			// Approximate: 1 empty + 9 presets + 1 help = 11 lines + borders = ~13 lines
+			currentY += 13
 		}
 	}
 
@@ -894,8 +902,8 @@ func (m Model) calculateSettingIndexFromClick(clickY int) int {
 	currentY++ // empty line
 	currentY++ // "Worker Configuration:"
 
-	// Worker settings (6-7): Max Workers, Work Directory
-	for i := 6; i < 8; i++ {
+	// Worker settings (7-8): Max Workers, Work Directory
+	for i := 7; i < 9; i++ {
 		if clickY == currentY {
 			return i
 		}
@@ -906,9 +914,9 @@ func (m Model) calculateSettingIndexFromClick(clickY int) int {
 	currentY++ // empty line
 	currentY++ // "Database:"
 
-	// Database setting (8): Database Path
+	// Database setting (9): Database Path
 	if clickY == currentY {
-		return 8
+		return 9
 	}
 
 	return -1 // No setting clicked
@@ -1442,6 +1450,38 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle SSH pool size dropdown navigation
+	if m.showSSHPoolSizeDropdown {
+		switch msg.String() {
+		case "up", "k":
+			if m.sshPoolSizeDropdownIndex > 0 {
+				m.sshPoolSizeDropdownIndex--
+			}
+			return m, nil
+		case "down", "j":
+			if m.sshPoolSizeDropdownIndex < 15 { // 16 values (1-16), so index 0-15
+				m.sshPoolSizeDropdownIndex++
+			}
+			return m, nil
+		case "enter":
+			// Select the highlighted pool size (index + 1 because values are 1-16)
+			poolSize := m.sshPoolSizeDropdownIndex + 1
+			m.cfg.Remote.SSHPoolSize = poolSize
+			m.settingsInputs[4].SetValue(fmt.Sprintf("%d", poolSize))
+			m.showSSHPoolSizeDropdown = false
+			m.isEditingSettings = false
+			m.configModified = true
+			m.statusMsg = fmt.Sprintf("SSH pool size set to: %d", poolSize)
+			return m, nil
+		case "esc":
+			// Cancel dropdown
+			m.showSSHPoolSizeDropdown = false
+			m.isEditingSettings = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// Handle preset dropdown navigation
 	if m.showPresetDropdown {
 		presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
@@ -1460,7 +1500,7 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Select the highlighted preset
 			m.cfg.Encoder.Preset = presets[m.presetDropdownIndex]
-			m.settingsInputs[5].SetValue(presets[m.presetDropdownIndex])
+			m.settingsInputs[6].SetValue(presets[m.presetDropdownIndex])
 			m.showPresetDropdown = false
 			m.isEditingSettings = false
 			m.configModified = true
@@ -1515,7 +1555,7 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.selectedSetting < 8 { // 9 editable settings (0-8)
+		if m.selectedSetting < 9 { // 10 editable settings (0-9)
 			m.selectedSetting++
 		}
 
@@ -1524,7 +1564,7 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		currentWorkers := m.cfg.Workers.MaxWorkers
 		newWorkers := currentWorkers + 1
 		m.workerPool.ScaleWorkers(newWorkers)
-		m.settingsInputs[6].SetValue(fmt.Sprintf("%d", newWorkers))
+		m.settingsInputs[7].SetValue(fmt.Sprintf("%d", newWorkers))
 		m.configModified = true
 		m.statusMsg = fmt.Sprintf("Workers scaled to %d", newWorkers)
 		m.addLog("INFO", fmt.Sprintf("Workers scaled up to %d", newWorkers))
@@ -1536,7 +1576,7 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if currentWorkers > 0 {
 			newWorkers := currentWorkers - 1
 			m.workerPool.ScaleWorkers(newWorkers)
-			m.settingsInputs[6].SetValue(fmt.Sprintf("%d", newWorkers))
+			m.settingsInputs[7].SetValue(fmt.Sprintf("%d", newWorkers))
 			m.configModified = true
 			m.statusMsg = fmt.Sprintf("Workers scaled to %d", newWorkers)
 			m.addLog("INFO", fmt.Sprintf("Workers scaled down to %d", newWorkers))
@@ -1547,7 +1587,16 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		// Start editing the selected field
-		if m.selectedSetting == 5 {
+		if m.selectedSetting == 4 {
+			// SSH Pool Size field - show dropdown instead
+			m.isEditingSettings = true
+			m.showSSHPoolSizeDropdown = true
+			m.validationError = ""
+
+			// Set current pool size index (value - 1 because index is 0-15 for values 1-16)
+			m.sshPoolSizeDropdownIndex = m.cfg.Remote.SSHPoolSize - 1
+			return m, nil
+		} else if m.selectedSetting == 6 {
 			// Preset field - show dropdown instead
 			m.isEditingSettings = true
 			m.showPresetDropdown = true

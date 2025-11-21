@@ -461,7 +461,7 @@ func (m Model) renderSettings() string {
 	for i := 0; i < 5; i++ {
 		prefix := "  "
 		if i == m.selectedSetting {
-			if m.isEditingSettings {
+			if m.isEditingSettings && !m.showSSHPoolSizeDropdown {
 				prefix = editingStyle.Render("▶ ")
 			} else {
 				prefix = selectedStyle.Render("▶ ")
@@ -472,10 +472,15 @@ func (m Model) renderSettings() string {
 
 		label := labelStyle.Render(settingNames[i])
 		value := m.settingsInputs[i].Value()
-		if i == m.selectedSetting && m.isEditingSettings {
+		if i == m.selectedSetting && m.isEditingSettings && !m.showSSHPoolSizeDropdown {
 			value = m.settingsInputs[i].View()
 		}
 		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+
+		// Show dropdown after SSH Pool Size field if active
+		if i == 4 && m.showSSHPoolSizeDropdown {
+			content += m.renderSSHPoolSizeDropdown()
+		}
 	}
 
 	// Encoder Settings
@@ -558,7 +563,7 @@ func (m Model) renderSettings() string {
 	if m.showSaveDiscardPrompt {
 		// Show save/discard prompt
 		content += m.renderSaveDiscardPrompt()
-	} else if m.showPresetDropdown {
+	} else if m.showSSHPoolSizeDropdown || m.showPresetDropdown {
 		// Help text is shown in the dropdown itself
 	} else if m.isEditingSettings {
 		content += helpStyle.Render("[Enter] Save • [Esc] Cancel")
@@ -573,6 +578,65 @@ func (m Model) renderSettings() string {
 	}
 
 	return boxStyle.Render(content)
+}
+
+// renderSSHPoolSizeDropdown renders a visual dropdown menu for SSH pool size
+func (m Model) renderSSHPoolSizeDropdown() string {
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	// Create dropdown items for pool sizes 1-16
+	for i := 1; i <= 16; i++ {
+		var line string
+		var desc string
+
+		// Provide helpful descriptions for common values
+		switch i {
+		case 1:
+			desc = "Minimal - single connection per worker"
+		case 2:
+			desc = "Low - two parallel operations"
+		case 4:
+			desc = "Default - good balance (recommended)"
+		case 8:
+			desc = "High - more parallel operations"
+		case 16:
+			desc = "Maximum - highest parallelism"
+		default:
+			desc = fmt.Sprintf("%d parallel SSH connections per worker", i)
+		}
+
+		if i-1 == m.sshPoolSizeDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %2d ", i))
+			line += " " + descStyle.Render(desc)
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %2d ", i))
+			line += " " + descStyle.Render(desc)
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
 }
 
 // renderPresetDropdown renders a visual dropdown menu for encoder presets
