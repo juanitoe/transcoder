@@ -210,6 +210,11 @@ func (m Model) renderDashboard() string {
 // renderJobs renders the jobs view with two panels: active and queued
 // renderJobs renders the jobs view with clickable panel tabs
 func (m Model) renderJobs() string {
+	// If in search mode, render search view instead
+	if m.searchMode {
+		return m.renderSearchView()
+	}
+
 	visibleHeight := m.calculateVisibleJobsHeight()
 	boxWidth := m.width - 4 // Full width minus margins
 
@@ -377,9 +382,90 @@ func (m Model) renderJobs() string {
 		helpText := ""
 		return jobsBox + helpText
 	} else {
-		helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [Enter] Actions menu")
+		helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [Enter] Actions menu  •  [/] search")
 		return jobsBox + helpText
 	}
+}
+
+// renderSearchView renders the job search interface
+func (m Model) renderSearchView() string {
+	boxWidth := m.width - 4
+
+	// Search header
+	header := headerStyle.Render("🔍 Search Jobs")
+
+	// Search input
+	inputStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		Width(boxWidth - 4)
+
+	searchBox := inputStyle.Render(m.searchInput.View())
+
+	// Results count
+	var resultsInfo string
+	if m.searchInput.Value() == "" {
+		resultsInfo = statusStyle.Render("Type to search by filename...")
+	} else if len(m.searchResults) == 0 {
+		resultsInfo = statusStyle.Render("No matching jobs found")
+	} else {
+		resultsInfo = fmt.Sprintf("Found %d matching jobs", len(m.searchResults))
+	}
+
+	// Results list
+	var resultsList string
+	if len(m.searchResults) > 0 {
+		resultsList = "\n"
+		visibleResults := 10 // Show up to 10 results
+		if visibleResults > len(m.searchResults) {
+			visibleResults = len(m.searchResults)
+		}
+
+		for i := 0; i < visibleResults; i++ {
+			job := m.searchResults[i]
+			prefix := "  "
+			style := lipgloss.NewStyle()
+
+			if i == m.searchSelectedIndex {
+				prefix = "► "
+				style = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("230")).
+					Background(lipgloss.Color("62")).
+					Bold(true)
+			}
+
+			statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
+
+			// Truncate filename if needed
+			fileName := job.FileName
+			maxLen := boxWidth - 30
+			if len(fileName) > maxLen {
+				fileName = fileName[:maxLen-3] + "..."
+			}
+
+			line := fmt.Sprintf("%s[%d] %s %s",
+				prefix,
+				job.ID,
+				statusColor.Render(fmt.Sprintf("%-12s", job.Status)),
+				fileName,
+			)
+			resultsList += style.Render(line) + "\n"
+		}
+
+		if len(m.searchResults) > visibleResults {
+			resultsList += statusStyle.Render(fmt.Sprintf("  ... and %d more", len(m.searchResults)-visibleResults))
+		}
+	}
+
+	content := header + "\n\n" + searchBox + "\n\n" + resultsInfo + resultsList
+
+	jobsBox := boxStyle.Copy().Width(boxWidth).Render(content)
+
+	// Help text for search mode
+	helpText := "\n" + helpStyle.Render("[Esc] exit search  •  [P] Pause all  •  [C] Cancel all  •  ↑/↓ navigate")
+
+	return jobsBox + helpText
 }
 
 func (m Model) renderHistory() string {

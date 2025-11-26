@@ -143,6 +143,12 @@ type Model struct {
 	priorityInput          textinput.Model
 	priorityEditJobID      int64 // ID of job being edited
 
+	// Job search
+	searchMode          bool              // In search mode
+	searchInput         textinput.Model   // Search text input
+	searchResults       []*types.TranscodeJob // Filtered jobs
+	searchSelectedIndex int               // Selected index in search results
+
 	// Logs
 	logs            []string
 	maxLogs         int
@@ -178,6 +184,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 	}
 	m.initSettingsInputs()
 	m.initPriorityInput()
+	m.initSearchInput()
 	m.addLog("INFO", "Transcoder TUI started")
 	return m
 }
@@ -294,6 +301,16 @@ func (m *Model) initPriorityInput() {
 		return nil
 	}
 	m.priorityInput = ti
+}
+
+// initSearchInput initializes the textinput field for job search
+func (m *Model) initSearchInput() {
+	ti := textinput.New()
+	ti.Placeholder = "Search jobs by filename..."
+	ti.CharLimit = 100
+	ti.Width = 40
+	ti.Focus()
+	m.searchInput = ti
 }
 
 // Init initializes the model
@@ -966,6 +983,11 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePriorityEdit(msg)
 	}
 
+	// Handle search mode
+	if m.searchMode {
+		return m.handleSearchInput(msg)
+	}
+
 	// Get current job list based on panel
 	var jobs []*types.TranscodeJob
 	var scrollOffset *int
@@ -1088,9 +1110,143 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.errorMsg = "Job already terminated"
 			}
 		}
+
+	case "/":
+		// Enter search mode
+		if m.viewMode == ViewJobs {
+			m.searchMode = true
+			m.searchInput.SetValue("")
+			m.searchInput.Focus()
+			m.searchResults = nil
+			m.searchSelectedIndex = 0
+		}
 	}
 
 	return m, nil
+}
+
+// handleSearchInput handles keys when in search mode
+func (m Model) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		// Exit search mode
+		m.searchMode = false
+		m.searchResults = nil
+		m.searchInput.SetValue("")
+		return m, nil
+
+	case tea.KeyEnter:
+		// Execute search
+		m.filterJobs()
+		return m, nil
+
+	case tea.KeyUp:
+		// Navigate up in results
+		if m.searchSelectedIndex > 0 {
+			m.searchSelectedIndex--
+		}
+		return m, nil
+
+	case tea.KeyDown:
+		// Navigate down in results
+		if m.searchSelectedIndex < len(m.searchResults)-1 {
+			m.searchSelectedIndex++
+		}
+		return m, nil
+	}
+
+	// Check for bulk actions
+	switch msg.String() {
+	case "P":
+		// Pause all matching jobs
+		if len(m.searchResults) > 0 {
+			count := m.bulkPauseJobs()
+			m.statusMsg = fmt.Sprintf("Paused %d jobs", count)
+			m.addLog("INFO", fmt.Sprintf("Bulk paused %d jobs matching '%s'", count, m.searchInput.Value()))
+			m.refreshData()
+			m.filterJobs() // Re-filter to update results
+		}
+		return m, nil
+
+	case "C":
+		// Cancel all matching jobs
+		if len(m.searchResults) > 0 {
+			count := m.bulkCancelJobs()
+			m.statusMsg = fmt.Sprintf("Canceled %d jobs", count)
+			m.addLog("INFO", fmt.Sprintf("Bulk canceled %d jobs matching '%s'", count, m.searchInput.Value()))
+			m.refreshData()
+			m.filterJobs() // Re-filter to update results
+		}
+		return m, nil
+	}
+
+	// Update the text input
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+
+	// Auto-filter as user types
+	m.filterJobs()
+
+	return m, cmd
+}
+
+// filterJobs filters jobs based on search query
+func (m *Model) filterJobs() {
+	query := strings.ToLower(m.searchInput.Value())
+	if query == "" {
+		m.searchResults = nil
+		return
+	}
+
+	m.searchResults = make([]*types.TranscodeJob, 0)
+
+	// Search in active jobs
+	for _, job := range m.activeJobs {
+		if strings.Contains(strings.ToLower(job.FileName), query) ||
+			strings.Contains(strings.ToLower(job.FilePath), query) {
+			m.searchResults = append(m.searchResults, job)
+		}
+	}
+
+	// Search in queued jobs
+	for _, job := range m.queuedJobs {
+		if strings.Contains(strings.ToLower(job.FileName), query) ||
+			strings.Contains(strings.ToLower(job.FilePath), query) {
+			m.searchResults = append(m.searchResults, job)
+		}
+	}
+
+	// Reset selection if out of bounds
+	if m.searchSelectedIndex >= len(m.searchResults) {
+		m.searchSelectedIndex = 0
+	}
+}
+
+// bulkPauseJobs pauses all jobs in search results that can be paused
+func (m *Model) bulkPauseJobs() int {
+	count := 0
+	for _, job := range m.searchResults {
+		if job.Status == types.StatusTranscoding || job.Status == types.StatusDownloading {
+			m.workerPool.PauseJob(job.ID)
+			count++
+		}
+	}
+	return count
+}
+
+// bulkCancelJobs cancels all jobs in search results
+func (m *Model) bulkCancelJobs() int {
+	count := 0
+	for _, job := range m.searchResults {
+		if job.Status != types.StatusCompleted &&
+			job.Status != types.StatusFailed &&
+			job.Status != types.StatusCanceled &&
+			job.Status != types.StatusSkipped {
+			m.workerPool.CancelJob(job.ID)
+			count++
+		}
+	}
+	return count
 }
 
 // handleJobActionDropdown handles keys when the job action dropdown is shown
