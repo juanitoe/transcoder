@@ -1054,7 +1054,8 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if job.Status == types.StatusQueued ||
 				job.Status == types.StatusFailed ||
 				job.Status == types.StatusCompleted ||
-				job.Status == types.StatusCanceled {
+				job.Status == types.StatusCanceled ||
+				job.Status == types.StatusSkipped {
 				if err := m.db.DeleteJob(job.ID); err != nil {
 					m.errorMsg = fmt.Sprintf("Failed to delete job: %v", err)
 				} else {
@@ -1073,7 +1074,8 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			job := jobs[m.selectedJob]
 			if job.Status != types.StatusCompleted &&
 				job.Status != types.StatusFailed &&
-				job.Status != types.StatusCanceled {
+				job.Status != types.StatusCanceled &&
+				job.Status != types.StatusSkipped {
 				if err := m.db.KillJob(job.ID); err != nil {
 					m.errorMsg = fmt.Sprintf("Failed to kill job: %v", err)
 				} else {
@@ -1240,13 +1242,13 @@ func (m Model) getJobActions(job *types.TranscodeJob) []JobAction {
 			description: "Force terminate immediately",
 		})
 
-	case types.StatusCompleted, types.StatusFailed, types.StatusCanceled:
+	case types.StatusCompleted, types.StatusFailed, types.StatusCanceled, types.StatusSkipped:
 		actions = append(actions, JobAction{
 			action:      "delete",
 			label:       "Delete",
 			description: "Remove from list",
 		})
-		if job.Status == types.StatusFailed {
+		if job.Status == types.StatusFailed || job.Status == types.StatusSkipped {
 			actions = append(actions, JobAction{
 				action:      "retry",
 				label:       "Retry",
@@ -2113,6 +2115,8 @@ func statusColor(status types.JobStatus) lipgloss.Color {
 		return lipgloss.Color("208") // Orange
 	case types.StatusCanceled:
 		return lipgloss.Color("240") // Dark gray
+	case types.StatusSkipped:
+		return lipgloss.Color("220") // Yellow - transcoded file was larger
 	default:
 		return lipgloss.Color("240") // Dark gray
 	}

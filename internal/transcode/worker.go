@@ -436,6 +436,18 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		return
 	}
 
+	// Check if transcoded file is larger than original
+	if !w.cfg.Encoder.AllowLargerOutput && transcodedInfo.Size >= job.FileSizeBytes {
+		sizeIncrease := float64(transcodedInfo.Size-job.FileSizeBytes) / float64(job.FileSizeBytes) * 100
+		reason := fmt.Sprintf("Transcoded file is larger than original (%.1f%% increase: %d -> %d bytes)",
+			sizeIncrease, job.FileSizeBytes, transcodedInfo.Size)
+		logging.Info("[%s] Job %d skipped: %s", workerID, job.ID, reason)
+		w.db.SkipJob(job.ID, reason, transcodedInfo.Size)
+		// Clean up local transcoded file
+		os.Remove(localOutputPath)
+		return
+	}
+
 	// Stage 4: Upload
 	w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
 	w.updateProgress(job.ID, types.StageUpload, 0, "Uploading", 0, transcodedInfo.Size)

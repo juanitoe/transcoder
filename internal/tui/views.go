@@ -419,6 +419,8 @@ func (m Model) renderHistory() string {
 			}
 		} else if job.Status == types.StatusFailed {
 			details = fmt.Sprintf("Error: %s", job.ErrorMessage)
+		} else if job.Status == types.StatusSkipped {
+			details = fmt.Sprintf("Skipped: %s", job.ErrorMessage)
 		}
 
 		content += style.Render(fmt.Sprintf(

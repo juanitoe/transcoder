@@ -627,6 +627,21 @@ func (db *DB) FailJob(jobID int64, errorMsg string) error {
 	return err
 }
 
+// SkipJob marks a job as skipped (e.g., transcoded file was larger than original)
+func (db *DB) SkipJob(jobID int64, reason string, transcodedSize int64) error {
+	_, err := db.conn.Exec(`
+		UPDATE transcode_jobs
+		SET status = 'skipped',
+		    error_message = ?,
+		    transcoded_file_size_bytes = ?,
+		    worker_id = '',
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, reason, transcodedSize, jobID)
+
+	return err
+}
+
 // PauseJob pauses a running job
 func (db *DB) PauseJob(jobID int64) error {
 	_, err := db.conn.Exec(`

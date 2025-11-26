@@ -16,6 +16,7 @@ const (
 	StatusFailed      JobStatus = "failed"
 	StatusPaused      JobStatus = "paused"
 	StatusCanceled    JobStatus = "canceled"
+	StatusSkipped     JobStatus = "skipped" // Transcoded file was larger than original
 )
 
 // ProcessingStage represents what stage of processing a job is in

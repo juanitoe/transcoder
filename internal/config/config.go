@@ -33,9 +33,10 @@ type RemoteConfig struct {
 
 // EncoderConfig contains video encoding settings
 type EncoderConfig struct {
-	Codec   string `yaml:"codec"`   // e.g., hevc_videotoolbox
-	Quality int    `yaml:"quality"` // 0-100
-	Preset  string `yaml:"preset"`  // ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+	Codec             string `yaml:"codec"`               // e.g., hevc_videotoolbox
+	Quality           int    `yaml:"quality"`             // 0-100
+	Preset            string `yaml:"preset"`              // ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+	AllowLargerOutput bool   `yaml:"allow_larger_output"` // Allow transcoded files larger than original (default false = skip if larger)
 }
 
 // WorkersConfig contains worker pool settings
