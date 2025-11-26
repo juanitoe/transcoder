@@ -1044,8 +1044,19 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Cancel selected job
 		if m.selectedJob < len(jobs) {
 			job := jobs[m.selectedJob]
-			m.workerPool.CancelJob(job.ID)
-			m.statusMsg = fmt.Sprintf("Canceling job #%d", job.ID)
+			// For queued jobs, cancel directly in DB
+			// For active jobs, signal the worker pool
+			if job.Status == types.StatusQueued {
+				if err := m.db.CancelJob(job.ID); err != nil {
+					m.errorMsg = fmt.Sprintf("Failed to cancel job: %v", err)
+				} else {
+					m.statusMsg = fmt.Sprintf("Canceled job #%d", job.ID)
+					m.refreshData()
+				}
+			} else {
+				m.workerPool.CancelJob(job.ID)
+				m.statusMsg = fmt.Sprintf("Canceling job #%d", job.ID)
+			}
 		}
 
 	case "enter":
@@ -1242,7 +1253,13 @@ func (m *Model) bulkCancelJobs() int {
 			job.Status != types.StatusFailed &&
 			job.Status != types.StatusCanceled &&
 			job.Status != types.StatusSkipped {
-			m.workerPool.CancelJob(job.ID)
+			// For queued jobs, cancel directly in DB
+			// For active jobs, signal the worker pool
+			if job.Status == types.StatusQueued {
+				m.db.CancelJob(job.ID)
+			} else {
+				m.workerPool.CancelJob(job.ID)
+			}
 			count++
 		}
 	}
@@ -1428,8 +1445,20 @@ func (m *Model) executeJobAction(job *types.TranscodeJob, action string) {
 		m.statusMsg = fmt.Sprintf("Resuming job #%d", job.ID)
 
 	case "cancel":
-		m.workerPool.CancelJob(job.ID)
-		m.statusMsg = fmt.Sprintf("Canceling job #%d", job.ID)
+		// For queued jobs, cancel directly in DB
+		// For active jobs, signal the worker pool
+		if job.Status == types.StatusQueued {
+			if err := m.db.CancelJob(job.ID); err != nil {
+				m.errorMsg = fmt.Sprintf("Failed to cancel job: %v", err)
+			} else {
+				m.statusMsg = fmt.Sprintf("Canceled job #%d", job.ID)
+				m.addLog("INFO", fmt.Sprintf("Canceled job #%d (%s)", job.ID, job.FileName))
+				m.refreshData()
+			}
+		} else {
+			m.workerPool.CancelJob(job.ID)
+			m.statusMsg = fmt.Sprintf("Canceling job #%d", job.ID)
+		}
 
 	case "kill":
 		if err := m.db.KillJob(job.ID); err != nil {

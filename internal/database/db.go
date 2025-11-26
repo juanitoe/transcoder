@@ -664,41 +664,74 @@ func (db *DB) ResumeJob(jobID int64) error {
 	return err
 }
 
-// CancelJob cancels a job
+// CancelJob cancels a job, marks the media file to not transcode, and deletes the job
 func (db *DB) CancelJob(jobID int64) error {
-	_, err := db.conn.Exec(`
-		UPDATE transcode_jobs
-		SET status = 'canceled', worker_id = '', updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, jobID)
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
 
-	return err
+	// Mark the media file as not needing transcoding (prevents re-adding)
+	_, err = tx.Exec(`
+		UPDATE media_files
+		SET should_transcode = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+	`, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update media file: %w", err)
+	}
+
+	// Delete the job record
+	_, err = tx.Exec(`DELETE FROM transcode_jobs WHERE id = ?`, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to delete job: %w", err)
+	}
+
+	return tx.Commit()
 }
 
-// KillJob immediately cancels a job and marks it as canceled
+// KillJob immediately cancels a job, marks the media file to not transcode, and deletes the job
 // Unlike CancelJob, this forces termination regardless of state
 func (db *DB) KillJob(jobID int64) error {
-	query := `
-		UPDATE transcode_jobs
-		SET status = 'canceled',
-		    error_message = 'Job killed by user',
-		    worker_id = '',
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-		    AND status NOT IN ('completed', 'failed', 'canceled')
-	`
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
 
-	result, err := db.conn.Exec(query, jobID)
+	// Check if job exists and is not already terminated
+	var count int
+	err = tx.QueryRow(`
+		SELECT COUNT(*) FROM transcode_jobs
+		WHERE id = ? AND status NOT IN ('completed', 'failed', 'canceled', 'skipped')
+	`, jobID).Scan(&count)
 	if err != nil {
 		return err
 	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
+	if count == 0 {
 		return fmt.Errorf("job not found or already terminated")
 	}
 
-	return nil
+	// Mark the media file as not needing transcoding (prevents re-adding)
+	_, err = tx.Exec(`
+		UPDATE media_files
+		SET should_transcode = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+	`, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update media file: %w", err)
+	}
+
+	// Delete the job record
+	_, err = tx.Exec(`DELETE FROM transcode_jobs WHERE id = ?`, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to delete job: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // DeleteJob permanently deletes a job from the database
