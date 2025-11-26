@@ -616,18 +616,30 @@ func (m Model) overlayPriorityInput(content string) string {
 
 // handleKeyPress processes keyboard input
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Check if we're in any text input mode
+	inTextInput := m.isEditingSettings || m.editingPriority || m.searchMode
+
 	// Global keys
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
 		return m, tea.Quit
 
+	case "q":
+		// Quit only if not in text input mode
+		if !inTextInput {
+			return m, tea.Quit
+		}
+
 	case "h", "?":
-		m.showHelp = !m.showHelp
-		return m, nil
+		// Toggle help only if not in text input mode
+		if !inTextInput {
+			m.showHelp = !m.showHelp
+			return m, nil
+		}
 
 	case "1", "2", "3", "4", "5":
 		// Don't switch views when editing
-		if m.isEditingSettings || m.editingPriority {
+		if inTextInput {
 			return m, nil
 		}
 
@@ -649,10 +661,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		// Refresh data
-		m.refreshData()
-		m.statusMsg = "Data refreshed"
-		return m, nil
+		// Refresh data (but not when in text input mode)
+		if !inTextInput {
+			m.refreshData()
+			m.statusMsg = "Data refreshed"
+			return m, nil
+		}
 	}
 
 	// View-specific keys (handle first to allow view-specific overrides)
