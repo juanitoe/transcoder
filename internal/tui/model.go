@@ -1201,31 +1201,23 @@ func (m Model) handleSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// filterJobs filters jobs based on search query
+// filterJobs searches jobs in database based on search query
 func (m *Model) filterJobs() {
-	query := strings.ToLower(m.searchInput.Value())
+	query := m.searchInput.Value()
 	if query == "" {
 		m.searchResults = nil
 		return
 	}
 
-	m.searchResults = make([]*types.TranscodeJob, 0)
-
-	// Search in active jobs
-	for _, job := range m.activeJobs {
-		if strings.Contains(strings.ToLower(job.FileName), query) ||
-			strings.Contains(strings.ToLower(job.FilePath), query) {
-			m.searchResults = append(m.searchResults, job)
-		}
+	// Search directly in database (no limit)
+	results, err := m.db.SearchJobs(query)
+	if err != nil {
+		m.errorMsg = fmt.Sprintf("Search error: %v", err)
+		m.searchResults = nil
+		return
 	}
 
-	// Search in queued jobs
-	for _, job := range m.queuedJobs {
-		if strings.Contains(strings.ToLower(job.FileName), query) ||
-			strings.Contains(strings.ToLower(job.FilePath), query) {
-			m.searchResults = append(m.searchResults, job)
-		}
-	}
+	m.searchResults = results
 
 	// Reset selection if out of bounds
 	if m.searchSelectedIndex >= len(m.searchResults) {

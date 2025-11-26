@@ -890,6 +890,32 @@ func (db *DB) GetQueuedJobs(limit int) ([]*types.TranscodeJob, error) {
 	return jobs, rows.Err()
 }
 
+// SearchJobs searches for jobs by filename pattern (case-insensitive)
+// Returns all matching jobs (active and queued) without limit
+func (db *DB) SearchJobs(pattern string) ([]*types.TranscodeJob, error) {
+	rows, err := db.conn.Query(`
+		SELECT * FROM transcode_jobs
+		WHERE (file_name LIKE ? OR file_path LIKE ?)
+		  AND status NOT IN ('completed', 'failed', 'canceled', 'skipped')
+		ORDER BY status ASC, priority DESC, created_at ASC
+	`, "%"+pattern+"%", "%"+pattern+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []*types.TranscodeJob
+	for rows.Next() {
+		job, err := db.scanTranscodeJobRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+
+	return jobs, rows.Err()
+}
+
 // GetActiveJobs retrieves all currently active jobs
 func (db *DB) GetActiveJobs() ([]*types.TranscodeJob, error) {
 	rows, err := db.conn.Query(`
