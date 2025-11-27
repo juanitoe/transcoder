@@ -284,7 +284,8 @@ func (db *DB) UpdateMediaFileBatch(updates map[int64]*types.MediaFile) error {
 			codec = ?, resolution_width = ?, resolution_height = ?,
 			duration_seconds = ?, bitrate_kbps = ?, fps = ?,
 			audio_streams_json = ?, subtitle_streams_json = ?,
-			should_transcode = ?, transcoding_priority = ?,
+			should_transcode = CASE WHEN should_transcode = 0 THEN 0 ELSE ? END,
+			transcoding_priority = ?,
 			estimated_size_reduction_percent = ?,
 			source_checksum = ?, source_checksum_algo = ?, source_checksum_at = ?,
 			updated_at = CURRENT_TIMESTAMP
