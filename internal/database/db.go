@@ -628,9 +628,16 @@ func (db *DB) FailJob(jobID int64, errorMsg string) error {
 	return err
 }
 
-// SkipJob marks a job as skipped (e.g., transcoded file was larger than original)
+// SkipJob marks a job as skipped and sets should_transcode=0 to prevent re-adding
 func (db *DB) SkipJob(jobID int64, reason string, transcodedSize int64) error {
-	_, err := db.conn.Exec(`
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Update job status
+	_, err = tx.Exec(`
 		UPDATE transcode_jobs
 		SET status = 'skipped',
 		    error_message = ?,
@@ -639,8 +646,22 @@ func (db *DB) SkipJob(jobID int64, reason string, transcodedSize int64) error {
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, reason, transcodedSize, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update job: %w", err)
+	}
 
-	return err
+	// Mark the media file as not needing transcoding (prevents re-adding)
+	_, err = tx.Exec(`
+		UPDATE media_files
+		SET should_transcode = 0,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+	`, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update media file: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // PauseJob pauses a running job

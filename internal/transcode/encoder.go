@@ -256,3 +256,85 @@ func CalculateSavings(originalSize, transcodedSize int64) (bytesSaved int64, per
 	}
 	return bytesSaved, percentSaved
 }
+
+// EstimateTranscodingSavings estimates whether transcoding is worthwhile
+// Returns: estimated savings percentage, whether to proceed, and a reason
+func EstimateTranscodingSavings(codec string, bitrateKbps int, resolutionWidth, resolutionHeight int, quality int) (estimatedSavings int, shouldProceed bool, reason string) {
+	// If we don't have bitrate info, proceed with transcoding
+	if bitrateKbps <= 0 {
+		return 30, true, "unknown bitrate, assuming worthwhile"
+	}
+
+	// Calculate pixels for resolution-based thresholds
+	pixels := resolutionWidth * resolutionHeight
+
+	// Estimate minimum bitrate HEVC would need for this resolution at the given quality
+	// These are rough estimates for quality=75 (high quality)
+	// Lower quality settings would produce lower bitrates
+	var minHEVCBitrate int
+	switch {
+	case pixels >= 3840*2160: // 4K
+		minHEVCBitrate = 8000 // 8 Mbps minimum for good 4K HEVC
+	case pixels >= 1920*1080: // 1080p
+		minHEVCBitrate = 3000 // 3 Mbps minimum for good 1080p HEVC
+	case pixels >= 1280*720: // 720p
+		minHEVCBitrate = 1500 // 1.5 Mbps minimum for good 720p HEVC
+	default: // SD
+		minHEVCBitrate = 800 // 800 kbps minimum for SD HEVC
+	}
+
+	// Adjust minimum based on quality setting (0-100)
+	// Higher quality = higher minimum bitrate
+	qualityFactor := float64(quality) / 75.0 // Normalize around default quality 75
+	minHEVCBitrate = int(float64(minHEVCBitrate) * qualityFactor)
+
+	// Estimate expected HEVC bitrate based on source codec
+	var expectedHEVCBitrate int
+
+	codec = strings.ToLower(codec)
+	switch {
+	case codec == "hevc" || codec == "h265" || codec == "hev1":
+		// Already HEVC - no point transcoding
+		return 0, false, "already HEVC"
+
+	case codec == "h264" || codec == "avc" || codec == "avc1":
+		// H.264 -> HEVC: typically 30-40% savings
+		expectedHEVCBitrate = int(float64(bitrateKbps) * 0.65) // ~35% smaller
+
+	case codec == "mpeg2" || codec == "mpeg2video":
+		// MPEG2 -> HEVC: typically 50-60% savings
+		expectedHEVCBitrate = int(float64(bitrateKbps) * 0.45) // ~55% smaller
+
+	case codec == "mpeg4" || codec == "msmpeg4" || codec == "divx" || codec == "xvid":
+		// MPEG4 -> HEVC: typically 40-50% savings
+		expectedHEVCBitrate = int(float64(bitrateKbps) * 0.55) // ~45% smaller
+
+	case codec == "vp8" || codec == "vp9":
+		// VP8/VP9 -> HEVC: VP9 is similar to HEVC, VP8 is like H.264
+		if codec == "vp9" {
+			expectedHEVCBitrate = int(float64(bitrateKbps) * 0.95) // ~5% smaller at best
+		} else {
+			expectedHEVCBitrate = int(float64(bitrateKbps) * 0.65)
+		}
+
+	default:
+		// Unknown codec - assume moderate savings
+		expectedHEVCBitrate = int(float64(bitrateKbps) * 0.60)
+	}
+
+	// If expected HEVC bitrate is below minimum for quality, use minimum
+	if expectedHEVCBitrate < minHEVCBitrate {
+		expectedHEVCBitrate = minHEVCBitrate
+	}
+
+	// Calculate actual expected savings
+	if expectedHEVCBitrate >= bitrateKbps {
+		// Transcoded file would be same size or larger
+		return 0, false, fmt.Sprintf("source bitrate (%d kbps) already efficient for %s", bitrateKbps, codec)
+	}
+
+	actualSavingsPercent := int((1.0 - float64(expectedHEVCBitrate)/float64(bitrateKbps)) * 100)
+
+	return actualSavingsPercent, true, fmt.Sprintf("estimated %d%% savings (%s %d kbps -> HEVC ~%d kbps)",
+		actualSavingsPercent, codec, bitrateKbps, expectedHEVCBitrate)
+}

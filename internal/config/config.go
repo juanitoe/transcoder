@@ -33,10 +33,11 @@ type RemoteConfig struct {
 
 // EncoderConfig contains video encoding settings
 type EncoderConfig struct {
-	Codec             string `yaml:"codec"`               // e.g., hevc_videotoolbox
-	Quality           int    `yaml:"quality"`             // 0-100
-	Preset            string `yaml:"preset"`              // ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-	AllowLargerOutput bool   `yaml:"allow_larger_output"` // Allow transcoded files larger than original (default false = skip if larger)
+	Codec              string `yaml:"codec"`                // e.g., hevc_videotoolbox
+	Quality            int    `yaml:"quality"`              // 0-100
+	Preset             string `yaml:"preset"`               // ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+	AllowLargerOutput  bool   `yaml:"allow_larger_output"`  // Allow transcoded files larger than original (default false = skip if larger)
+	MinExpectedSavings int    `yaml:"min_expected_savings"` // Minimum expected size reduction % to attempt transcode (default 10)
 }
 
 // WorkersConfig contains worker pool settings
@@ -134,6 +135,10 @@ func (c *Config) applyDefaults() {
 
 	if c.Encoder.Preset == "" {
 		c.Encoder.Preset = "medium"
+	}
+
+	if c.Encoder.MinExpectedSavings == 0 {
+		c.Encoder.MinExpectedSavings = 10 // Default 10% minimum expected savings
 	}
 
 	// Workers defaults

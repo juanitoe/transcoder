@@ -353,6 +353,30 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	// Only transcode if we don't have a valid output yet
 	if localOutputChecksum == "" {
+		// Pre-transcode check: estimate if transcoding is worthwhile
+		var mediaFile *types.MediaFile
+		mediaFile, _ = w.db.GetMediaFileByPath(job.FilePath)
+		if mediaFile != nil {
+			estimatedSavings, shouldProceed, reason := EstimateTranscodingSavings(
+				mediaFile.Codec,
+				mediaFile.BitrateKbps,
+				mediaFile.ResolutionWidth,
+				mediaFile.ResolutionHeight,
+				w.cfg.Encoder.Quality,
+			)
+
+			minSavings := w.cfg.Encoder.MinExpectedSavings
+			if !shouldProceed || estimatedSavings < minSavings {
+				skipReason := fmt.Sprintf("Skipped: %s (expected %d%% < min %d%%)", reason, estimatedSavings, minSavings)
+				logging.Info("[%s] Job %d skipped pre-transcode: %s", workerID, job.ID, skipReason)
+				w.db.SkipJob(job.ID, skipReason, 0)
+				// Clean up downloaded file
+				os.Remove(localInputPath)
+				return
+			}
+			logging.Info("[%s] Job %d proceeding: %s", workerID, job.ID, reason)
+		}
+
 		w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
 		w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding", 0, 0)
 
@@ -377,12 +401,15 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 		// Get duration for progress calculation (in microseconds)
 		var durationUs int64 = 1
-		mediaFile, err := w.db.GetMediaFileByPath(job.FilePath)
-		if err == nil && mediaFile != nil && mediaFile.DurationSeconds > 0 {
+		// Reuse mediaFile from pre-transcode check if available, otherwise fetch it
+		if mediaFile == nil {
+			mediaFile, _ = w.db.GetMediaFileByPath(job.FilePath)
+		}
+		if mediaFile != nil && mediaFile.DurationSeconds > 0 {
 			durationUs = int64(mediaFile.DurationSeconds * 1000000)
 		}
 
-		err = w.encoder.Transcode(jobCtx, localInputPath, localOutputPath, durationUs, func(progress TranscodeProgress) {
+		err := w.encoder.Transcode(jobCtx, localInputPath, localOutputPath, durationUs, func(progress TranscodeProgress) {
 			w.updateProgress(job.ID, types.StageTranscode, progress.Progress,
 				fmt.Sprintf("Transcoding: frame=%d fps=%.1f speed=%.2fx", progress.Frame, progress.FPS, progress.Speed), 0, 0)
 		})
