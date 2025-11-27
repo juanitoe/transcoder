@@ -265,19 +265,16 @@ func EstimateTranscodingSavings(codec string, bitrateKbps int, resolutionWidth, 
 		return 30, true, "unknown bitrate, assuming worthwhile"
 	}
 
-	// Calculate pixels for resolution-based thresholds
-	pixels := resolutionWidth * resolutionHeight
-
-	// Estimate minimum bitrate HEVC would need for this resolution at the given quality
-	// These are rough estimates for quality=75 (high quality)
-	// Lower quality settings would produce lower bitrates
+	// Use width-based thresholds for resolution detection
+	// This handles widescreen aspect ratios (2.35:1) where 1920-wide videos
+	// have fewer pixels than 1920x1080 but should still be treated as 1080p
 	var minHEVCBitrate int
 	switch {
-	case pixels >= 3840*2160: // 4K
+	case resolutionWidth >= 3840: // 4K
 		minHEVCBitrate = 8000 // 8 Mbps minimum for good 4K HEVC
-	case pixels >= 1920*1080: // 1080p
+	case resolutionWidth >= 1920: // 1080p (includes widescreen like 1920x800)
 		minHEVCBitrate = 3000 // 3 Mbps minimum for good 1080p HEVC
-	case pixels >= 1280*720: // 720p
+	case resolutionWidth >= 1280: // 720p
 		minHEVCBitrate = 1500 // 1.5 Mbps minimum for good 720p HEVC
 	default: // SD
 		minHEVCBitrate = 800 // 800 kbps minimum for SD HEVC
