@@ -9,10 +9,6 @@ import (
 	"transcoder/internal/version"
 )
 
-const (
-	boxPadding = 8 // Consistent padding for all boxes (borders + padding + margins)
-)
-
 // renderHeader renders the top header bar
 func (m Model) renderHeader() string {
 	title := "📹 Video Transcoder TUI"
@@ -122,7 +118,7 @@ func (m Model) renderDashboard() string {
 		stats.AvgSizeReduction,
 	)
 
-	statsBox := boxStyle.Copy().
+	statsBox := boxStyle.
 		Width(boxWidth).
 		Render(statsContent)
 
@@ -138,7 +134,7 @@ func (m Model) renderDashboard() string {
 		labelStyle.Render("Use [+/-] in Settings to scale workers"),
 	)
 
-	workerBox := boxStyle.Copy().
+	workerBox := boxStyle.
 		Width(boxWidth).
 		Render(workerContent)
 
@@ -188,7 +184,7 @@ func (m Model) renderDashboard() string {
 			)
 		}
 	}
-	activeBox := boxStyle.Copy().
+	activeBox := boxStyle.
 		Width(boxWidth).
 		Render(activeJobsStr)
 
@@ -374,7 +370,7 @@ func (m Model) renderJobs() string {
 	}
 
 	// Create full-width box
-	jobsBox := boxStyle.Copy().Width(boxWidth).Render(panelSwitcher + "\n\n" + panelContent)
+	jobsBox := boxStyle.Width(boxWidth).Render(panelSwitcher + "\n\n" + panelContent)
 
 	// Add help text
 	if m.showJobActionDropdown {
@@ -460,67 +456,12 @@ func (m Model) renderSearchView() string {
 
 	content := header + "\n\n" + searchBox + "\n\n" + resultsInfo + resultsList
 
-	jobsBox := boxStyle.Copy().Width(boxWidth).Render(content)
+	jobsBox := boxStyle.Width(boxWidth).Render(content)
 
 	// Help text for search mode
 	helpText := "\n" + helpStyle.Render("[Esc] exit search  •  [P] Pause all  •  [C] Cancel all  •  ↑/↓ navigate")
 
 	return jobsBox + helpText
-}
-
-func (m Model) renderHistory() string {
-	content := "📜 Job History\n\n"
-
-	if len(m.recentJobs) == 0 {
-		content += statusStyle.Render("No completed jobs")
-		return boxStyle.Render(content)
-	}
-
-	// Show recent jobs
-	for i, job := range m.recentJobs {
-		style := lipgloss.NewStyle()
-		if i == m.selectedJob {
-			style = selectedStyle
-		}
-
-		prefix := "  "
-		if i == m.selectedJob {
-			prefix = "► "
-		}
-
-		statusColor := lipgloss.NewStyle().Foreground(statusColor(job.Status))
-
-		var details string
-		if job.Status == types.StatusCompleted {
-			originalSize := job.FileSizeBytes
-			newSize := job.TranscodedFileSizeBytes
-			if newSize > 0 && originalSize > 0 {
-				saved := originalSize - newSize
-				percent := (float64(saved) / float64(originalSize)) * 100
-				details = fmt.Sprintf("Saved: %s (%.1f%%)  •  Time: %s",
-					formatBytes(saved),
-					percent,
-					formatDuration(job.EncodingTimeSeconds),
-				)
-			}
-		} else if job.Status == types.StatusFailed {
-			details = fmt.Sprintf("Error: %s", job.ErrorMessage)
-		} else if job.Status == types.StatusSkipped {
-			details = fmt.Sprintf("Skipped: %s", job.ErrorMessage)
-		}
-
-		content += style.Render(fmt.Sprintf(
-			"%s[%d] %s  %s\n"+
-			"     %s\n",
-			prefix,
-			job.ID,
-			statusColor.Render(string(job.Status)),
-			job.FileName,
-			details,
-		))
-	}
-
-	return boxStyle.Render(content)
 }
 
 // renderSettings renders the settings view
@@ -557,8 +498,6 @@ func (m Model) renderSettings() string {
 			} else {
 				prefix = selectedStyle.Render("▶ ")
 			}
-		} else {
-			prefix = "  "
 		}
 
 		label := labelStyle.Render(settingNames[i])
@@ -585,8 +524,6 @@ func (m Model) renderSettings() string {
 			} else {
 				prefix = selectedStyle.Render("▶ ")
 			}
-		} else {
-			prefix = "  "
 		}
 
 		label := labelStyle.Render(settingNames[i])
@@ -612,8 +549,6 @@ func (m Model) renderSettings() string {
 			} else {
 				prefix = selectedStyle.Render("▶ ")
 			}
-		} else {
-			prefix = "  "
 		}
 
 		label := labelStyle.Render(settingNames[i])
@@ -634,8 +569,6 @@ func (m Model) renderSettings() string {
 		} else {
 			prefix = selectedStyle.Render("▶ ")
 		}
-	} else {
-		prefix = "  "
 	}
 	label := labelStyle.Render(settingNames[i])
 	value := m.settingsInputs[i].Value()
@@ -658,8 +591,6 @@ func (m Model) renderSettings() string {
 			} else {
 				prefix = selectedStyle.Render("▶ ")
 			}
-		} else {
-			prefix = "  "
 		}
 
 		label := labelStyle.Render(settingNames[i])

@@ -13,28 +13,28 @@ import (
 	"sync"
 	"time"
 
-	"transcoder/internal/checksum"
-	"transcoder/internal/config"
-	"transcoder/internal/database"
-	"transcoder/internal/types"
 	"github.com/cespare/xxhash/v2"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"transcoder/internal/checksum"
+	"transcoder/internal/config"
+	"transcoder/internal/database"
+	"transcoder/internal/types"
 )
 
 // Scanner handles remote media library scanning
 type Scanner struct {
-	cfg           *config.Config
-	db            *database.DB
-	sshClient     *ssh.Client  // Main SSH client
-	sftpClient    *sftp.Client // Main SFTP client for directory operations
-	sshPool       *sshPool     // Pool of SSH clients for parallel FFprobe
-	progress      ScanProgress
-	progressMu    sync.Mutex   // Protects progress updates from concurrent workers
-	logFile       *os.File
-	logWriter     *bufio.Writer // Buffered writer for efficient logging
-	checksumAlgo  checksum.Algorithm // Detected remote checksum algorithm
+	cfg          *config.Config
+	db           *database.DB
+	sshClient    *ssh.Client  // Main SSH client
+	sftpClient   *sftp.Client // Main SFTP client for directory operations
+	sshPool      *sshPool     // Pool of SSH clients for parallel FFprobe
+	progress     ScanProgress
+	progressMu   sync.Mutex // Protects progress updates from concurrent workers
+	logFile      *os.File
+	logWriter    *bufio.Writer      // Buffered writer for efficient logging
+	checksumAlgo checksum.Algorithm // Detected remote checksum algorithm
 }
 
 // sshPool manages a pool of SSH connections for parallel operations
@@ -82,7 +82,7 @@ func (p *sshPool) Close() {
 	close(p.available)
 	for _, client := range p.clients {
 		if client != nil {
-			client.Close()
+			_ = client.Close()
 		}
 	}
 }
@@ -98,9 +98,9 @@ type workItem struct {
 type workResult struct {
 	path       string
 	metadata   *types.MediaFile
-	isNew      bool     // true if file is new, false if update
-	existingID int64    // ID of existing file if update
-	size       int64    // File size for progress tracking
+	isNew      bool  // true if file is new, false if update
+	existingID int64 // ID of existing file if update
+	size       int64 // File size for progress tracking
 	err        error
 }
 
@@ -230,7 +230,7 @@ func (s *Scanner) Connect(ctx context.Context) error {
 		s.logDebug("SFTP client created with default buffer size")
 	}
 	if err != nil {
-		s.sshClient.Close()
+		_ = s.sshClient.Close()
 		return fmt.Errorf("failed to create SFTP client: %w", err)
 	}
 	s.sftpClient = sftpClient
@@ -243,8 +243,8 @@ func (s *Scanner) Connect(ctx context.Context) error {
 	s.logDebug("Creating SSH connection pool with %d connections", poolSize)
 	pool, err := newSSHPool(s.cfg, poolSize)
 	if err != nil {
-		s.sftpClient.Close()
-		s.sshClient.Close()
+		_ = s.sftpClient.Close()
+		_ = s.sshClient.Close()
 		return fmt.Errorf("failed to create SSH connection pool: %w", err)
 	}
 	s.sshPool = pool
@@ -264,7 +264,7 @@ func (s *Scanner) detectRemoteChecksumAlgo() checksum.Algorithm {
 		s.logDebug("Failed to create session for checksum detection: %v", err)
 		return checksum.AlgoMD5 // Default fallback
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	output, err := session.Output(checksum.DetectRemoteCommand())
 	if err != nil {
@@ -286,33 +286,33 @@ func (s *Scanner) Close() error {
 		s.sshPool.Close()
 	}
 	if s.sftpClient != nil {
-		s.sftpClient.Close()
+		_ = s.sftpClient.Close()
 	}
 	if s.sshClient != nil {
-		s.sshClient.Close()
+		_ = s.sshClient.Close()
 	}
 	if s.logWriter != nil {
-		s.logWriter.Flush() // Flush buffered logs before closing
+		_ = s.logWriter.Flush() // Flush buffered logs before closing
 	}
 	if s.logFile != nil {
-		s.logFile.Close()
+		_ = s.logFile.Close()
 	}
 	return nil
 }
 
 // ScanProgress represents scan progress information
 type ScanProgress struct {
-	CurrentPath   string
-	FilesScanned  int
-	FilesAdded    int
-	FilesUpdated  int
-	BytesScanned  int64
-	TotalFiles    int     // Total files discovered (for percentage calculation)
-	TotalBytes    int64   // Total bytes discovered (for percentage calculation)
-	ErrorCount    int
-	LastError     error
-	FilesPerSec   float64 // Scan rate in files/second
-	BytesPerSec   float64 // Scan rate in bytes/second
+	CurrentPath  string
+	FilesScanned int
+	FilesAdded   int
+	FilesUpdated int
+	BytesScanned int64
+	TotalFiles   int   // Total files discovered (for percentage calculation)
+	TotalBytes   int64 // Total bytes discovered (for percentage calculation)
+	ErrorCount   int
+	LastError    error
+	FilesPerSec  float64 // Scan rate in files/second
+	BytesPerSec  float64 // Scan rate in bytes/second
 }
 
 // progressThrottler controls how often progress updates are sent
@@ -331,7 +331,7 @@ func newProgressThrottler() *progressThrottler {
 	return &progressThrottler{
 		lastUpdate:     time.Now(),
 		updateInterval: 2 * time.Second, // Update at most every 2 seconds
-		fileInterval:   10,               // Or every 10 files
+		fileInterval:   10,              // Or every 10 files
 	}
 }
 
@@ -391,7 +391,7 @@ func (s *Scanner) Scan(ctx context.Context, progressCb ProgressCallback) error {
 
 	// Flush logs one more time after final log message
 	if s.logWriter != nil {
-		s.logWriter.Flush()
+		_ = s.logWriter.Flush()
 	}
 
 	return nil
@@ -414,7 +414,7 @@ func (s *Scanner) sendProgress(progress *ScanProgress, startTime time.Time, prog
 	}
 	// Flush logs periodically with progress updates
 	if s.logWriter != nil {
-		s.logWriter.Flush()
+		_ = s.logWriter.Flush()
 	}
 }
 
@@ -462,7 +462,7 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 		numWorkers = 4
 	}
 
-	workCh := make(chan workItem, numWorkers*2)  // Buffered to avoid blocking directory walker
+	workCh := make(chan workItem, numWorkers*2) // Buffered to avoid blocking directory walker
 	resultsCh := make(chan workResult, numWorkers*2)
 
 	// Start worker goroutines
@@ -829,7 +829,7 @@ func (s *Scanner) DownloadFileWithChecksum(ctx context.Context, remotePath, loca
 	if err != nil {
 		return "", fmt.Errorf("failed to open remote file: %w", err)
 	}
-	defer remoteFile.Close()
+	defer func() { _ = remoteFile.Close() }()
 
 	// Get file size
 	stat, err := remoteFile.Stat()
@@ -847,7 +847,7 @@ func (s *Scanner) DownloadFileWithChecksum(ctx context.Context, remotePath, loca
 	if err != nil {
 		return "", fmt.Errorf("failed to create local file: %w", err)
 	}
-	defer localFile.Close()
+	defer func() { _ = localFile.Close() }()
 
 	// Create hasher for checksum calculation
 	hasher := xxhash.New()
@@ -871,7 +871,7 @@ func (s *Scanner) DownloadFileWithChecksum(ctx context.Context, remotePath, loca
 				return "", fmt.Errorf("failed to write to local file: %w", writeErr)
 			}
 			// Write to hasher for checksum calculation
-			hasher.Write(buf[:n])
+			_, _ = hasher.Write(buf[:n])
 			bytesRead += int64(n)
 
 			// Report progress
@@ -909,7 +909,7 @@ func (s *Scanner) UploadFileWithChecksum(ctx context.Context, localPath, remoteP
 	if err != nil {
 		return "", fmt.Errorf("failed to open local file: %w", err)
 	}
-	defer localFile.Close()
+	defer func() { _ = localFile.Close() }()
 
 	// Get file size
 	stat, err := localFile.Stat()
@@ -929,7 +929,7 @@ func (s *Scanner) UploadFileWithChecksum(ctx context.Context, localPath, remoteP
 	if err != nil {
 		return "", fmt.Errorf("failed to create remote file: %w", err)
 	}
-	defer remoteFile.Close()
+	defer func() { _ = remoteFile.Close() }()
 
 	// Create hasher for checksum calculation
 	hasher := xxhash.New()
@@ -953,7 +953,7 @@ func (s *Scanner) UploadFileWithChecksum(ctx context.Context, localPath, remoteP
 				return "", fmt.Errorf("failed to write to remote file: %w", writeErr)
 			}
 			// Write to hasher for checksum calculation
-			hasher.Write(buf[:n])
+			_, _ = hasher.Write(buf[:n])
 			bytesWritten += int64(n)
 
 			// Report progress
@@ -1013,7 +1013,7 @@ func (s *Scanner) CalculateRemoteChecksum(remotePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create SSH session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Use detected algorithm
 	cmd := checksum.RemoteCommand(remotePath, s.checksumAlgo)
@@ -1044,7 +1044,7 @@ func (s *Scanner) logDebug(format string, args ...interface{}) {
 	message := fmt.Sprintf(format, args...)
 	logLine := fmt.Sprintf("[%s] DEBUG: %s\n", timestamp, message)
 
-	s.logWriter.WriteString(logLine)
+	_, _ = s.logWriter.WriteString(logLine)
 }
 
 // formatBytes formats bytes into a human-readable string

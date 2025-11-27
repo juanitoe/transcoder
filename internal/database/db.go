@@ -15,8 +15,8 @@ import (
 
 // DB represents the database connection
 type DB struct {
-	conn               *sql.DB
-	getByPathStmt      *sql.Stmt // Prepared statement for GetMediaFileByPath
+	conn          *sql.DB
+	getByPathStmt *sql.Stmt // Prepared statement for GetMediaFileByPath
 }
 
 // New creates a new database connection and initializes the schema
@@ -50,11 +50,11 @@ func New(dbPath string) (*DB, error) {
 	// If it fails, continue with default journal mode (DELETE)
 	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		// WAL mode failed, try DELETE mode
-		conn.Exec("PRAGMA journal_mode=DELETE")
+		_, _ = conn.Exec("PRAGMA journal_mode=DELETE")
 	}
 
 	// Set synchronous mode to NORMAL for better performance
-	conn.Exec("PRAGMA synchronous=NORMAL")
+	_, _ = conn.Exec("PRAGMA synchronous=NORMAL")
 
 	// Create schema
 	if _, err := conn.Exec(schemaSQL); err != nil {
@@ -104,7 +104,7 @@ func (db *DB) runMigrations() error {
 	if version < 2 {
 		// Check if columns already exist (in case of partial migration)
 		var colCount int
-		db.conn.QueryRow(`
+		_ = db.conn.QueryRow(`
 			SELECT COUNT(*) FROM pragma_table_info('media_files')
 			WHERE name = 'source_checksum'
 		`).Scan(&colCount)
@@ -132,7 +132,7 @@ func (db *DB) runMigrations() error {
 func (db *DB) Close() error {
 	// Close prepared statements
 	if db.getByPathStmt != nil {
-		db.getByPathStmt.Close()
+		_ = db.getByPathStmt.Close()
 	}
 	return db.conn.Close()
 }
@@ -221,7 +221,7 @@ func (db *DB) AddMediaFileBatch(files []*types.MediaFile) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(`
 		INSERT OR IGNORE INTO media_files (
@@ -236,7 +236,7 @@ func (db *DB) AddMediaFileBatch(files []*types.MediaFile) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	ids := make([]int64, 0, len(files))
 	for _, file := range files {
@@ -276,7 +276,7 @@ func (db *DB) UpdateMediaFileBatch(updates map[int64]*types.MediaFile) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(`
 		UPDATE media_files SET
@@ -294,7 +294,7 @@ func (db *DB) UpdateMediaFileBatch(updates map[int64]*types.MediaFile) error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for id, file := range updates {
 		audioJSON, _ := json.Marshal(file.AudioStreamsJSON)
@@ -343,7 +343,7 @@ func (db *DB) GetFilesNeedingChecksums(limit int) ([]*types.MediaFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var files []*types.MediaFile
 	for rows.Next() {
@@ -368,10 +368,10 @@ func (db *DB) GetFilesNeedingChecksums(limit int) ([]*types.MediaFile, error) {
 
 		// Parse JSON fields
 		if audioJSON != "" {
-			json.Unmarshal([]byte(audioJSON), &file.AudioStreamsJSON)
+			_ = json.Unmarshal([]byte(audioJSON), &file.AudioStreamsJSON)
 		}
 		if subtitleJSON != "" {
-			json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreamsJSON)
+			_ = json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreamsJSON)
 		}
 
 		// Handle nullable checksum fields
@@ -417,7 +417,7 @@ func (db *DB) ClaimNextJob(workerID string) (*types.TranscodeJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var jobID int64
 
@@ -535,7 +535,7 @@ func (db *DB) CompleteJob(jobID int64, outputSize int64, encodingTime int, fps f
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Update the job status
 	_, err = tx.Exec(`
@@ -575,7 +575,7 @@ func (db *DB) CompleteJobWithChecksums(jobID int64, outputSize int64, encodingTi
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Update the job status with checksums
 	_, err = tx.Exec(`
@@ -634,7 +634,7 @@ func (db *DB) SkipJob(jobID int64, reason string, transcodedSize int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Update job status
 	_, err = tx.Exec(`
@@ -692,7 +692,7 @@ func (db *DB) CancelJob(jobID int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Mark the media file as not needing transcoding (prevents re-adding)
 	_, err = tx.Exec(`
@@ -721,7 +721,7 @@ func (db *DB) KillJob(jobID int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Check if job exists and is not already terminated
 	var count int
@@ -842,7 +842,7 @@ func (db *DB) QueueJobsForTranscoding(limit int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	count := 0
 	for rows.Next() {
@@ -898,7 +898,7 @@ func (db *DB) GetQueuedJobs(limit int) ([]*types.TranscodeJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var jobs []*types.TranscodeJob
 	for rows.Next() {
@@ -924,7 +924,7 @@ func (db *DB) SearchJobs(pattern string) ([]*types.TranscodeJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var jobs []*types.TranscodeJob
 	for rows.Next() {
@@ -948,7 +948,7 @@ func (db *DB) GetActiveJobs() ([]*types.TranscodeJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var jobs []*types.TranscodeJob
 	for rows.Next() {
@@ -973,7 +973,7 @@ func (db *DB) GetCompletedJobs(limit int) ([]*types.TranscodeJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var jobs []*types.TranscodeJob
 	for rows.Next() {
@@ -1124,8 +1124,8 @@ func (db *DB) scanMediaFile(row *sql.Row) (*types.MediaFile, error) {
 		return nil, err
 	}
 
-	json.Unmarshal([]byte(audioJSON), &file.AudioStreamsJSON)
-	json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreamsJSON)
+	_ = json.Unmarshal([]byte(audioJSON), &file.AudioStreamsJSON)
+	_ = json.Unmarshal([]byte(subtitleJSON), &file.SubtitleStreamsJSON)
 
 	// Handle nullable checksum fields
 	if sourceChecksum.Valid {

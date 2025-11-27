@@ -33,7 +33,7 @@ func runTUI() error {
 		cfg = config.Default()
 		fmt.Printf("Warning: Could not load config from %s, using defaults\n", configPath)
 		fmt.Println("Press Enter to continue...")
-		fmt.Scanln()
+		_, _ = fmt.Scanln()
 	}
 
 	// Initialize application logging
@@ -51,7 +51,7 @@ func runTUI() error {
 		logging.Error("Failed to open database: %v", err)
 		return fmt.Errorf("failed to open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	logging.Info("Database opened: %s", dbPath)
 
 	// Recover jobs from previous run (requeue orphaned jobs)
@@ -63,7 +63,7 @@ func runTUI() error {
 		logging.Info("Recovered %d orphaned jobs from previous run", recoveredCount)
 		fmt.Printf("Recovered %d orphaned jobs from previous run\n", recoveredCount)
 		fmt.Println("Press Enter to continue...")
-		fmt.Scanln()
+		_, _ = fmt.Scanln()
 	}
 
 	// Create scanner

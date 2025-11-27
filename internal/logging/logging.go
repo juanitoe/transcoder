@@ -19,11 +19,23 @@ const (
 	LevelError
 )
 
+// LogEntry represents a single log entry
+type LogEntry struct {
+	Timestamp time.Time
+	Level     string
+	Message   string
+}
+
+// LogSubscriber is a function that receives log entries
+type LogSubscriber func(entry LogEntry)
+
 // Logger handles application-wide logging
 type Logger struct {
-	file  *os.File
-	level Level
-	mu    sync.Mutex
+	file        *os.File
+	level       Level
+	mu          sync.Mutex
+	subscribers []LogSubscriber
+	subMu       sync.RWMutex
 }
 
 var (
@@ -92,24 +104,48 @@ func parseLevel(levelStr string) Level {
 func Close() {
 	if defaultLogger != nil && defaultLogger.file != nil {
 		defaultLogger.Info("=== Transcoder stopped ===")
-		defaultLogger.file.Close()
+		_ = defaultLogger.file.Close()
+	}
+}
+
+// Subscribe adds a subscriber to receive log entries
+func Subscribe(subscriber LogSubscriber) {
+	if defaultLogger != nil {
+		defaultLogger.subMu.Lock()
+		defaultLogger.subscribers = append(defaultLogger.subscribers, subscriber)
+		defaultLogger.subMu.Unlock()
 	}
 }
 
 // log writes a log message at the given level
 func (l *Logger) log(level Level, levelStr string, format string, args ...interface{}) {
-	if l == nil || l.file == nil || level < l.level {
+	if l == nil || level < l.level {
 		return
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	now := time.Now()
 	message := fmt.Sprintf(format, args...)
-	logLine := fmt.Sprintf("[%s] %s: %s\n", timestamp, levelStr, message)
 
-	l.file.WriteString(logLine)
+	// Write to file
+	l.mu.Lock()
+	if l.file != nil {
+		timestamp := now.Format("2006-01-02 15:04:05")
+		logLine := fmt.Sprintf("[%s] %s: %s\n", timestamp, levelStr, message)
+		_, _ = l.file.WriteString(logLine)
+	}
+	l.mu.Unlock()
+
+	// Notify subscribers
+	entry := LogEntry{
+		Timestamp: now,
+		Level:     levelStr,
+		Message:   message,
+	}
+	l.subMu.RLock()
+	for _, sub := range l.subscribers {
+		sub(entry)
+	}
+	l.subMu.RUnlock()
 }
 
 // Debug logs a debug message

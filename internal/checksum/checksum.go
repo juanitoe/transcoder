@@ -42,7 +42,7 @@ func CalculateFile(filePath string) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	hasher := xxhash.New()
 	if _, err := io.Copy(hasher, f); err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"transcoder/internal/config"
 	"transcoder/internal/database"
+	"transcoder/internal/logging"
 	"transcoder/internal/scanner"
 	"transcoder/internal/transcode"
 	"transcoder/internal/types"
@@ -83,16 +84,16 @@ func (ph *ProgressHistory) CalculateBandwidth() float64 {
 
 // Model is the Bubble Tea model for the TUI
 type Model struct {
-	cfg          *config.Config
-	db           *database.DB
-	scanner      *scanner.Scanner
-	workerPool   *transcode.WorkerPool
+	cfg        *config.Config
+	db         *database.DB
+	scanner    *scanner.Scanner
+	workerPool *transcode.WorkerPool
 
 	// State
-	viewMode     ViewMode
-	width        int
-	height       int
-	lastUpdate   time.Time
+	viewMode   ViewMode
+	width      int
+	height     int
+	lastUpdate time.Time
 
 	// Data
 	statistics   *types.Statistics
@@ -106,35 +107,35 @@ type Model struct {
 	scanProgress scanner.ScanProgress
 
 	// UI State
-	selectedJob    int
-	selectedSetting int
-	statusMsg      string
-	errorMsg       string
-	jobsPanel      int  // 0=active jobs, 1=queued jobs
-	activeJobsScrollOffset  int
-	queuedJobsScrollOffset  int
+	selectedJob            int
+	selectedSetting        int
+	statusMsg              string
+	errorMsg               string
+	jobsPanel              int // 0=active jobs, 1=queued jobs
+	activeJobsScrollOffset int
+	queuedJobsScrollOffset int
 
 	// Keyboard hints
 	showHelp       bool
 	configModified bool
 
 	// Settings editing
-	isEditingSettings          bool
-	settingsInputs             []textinput.Model
-	validationError            string
-	configPath                 string // Path to save config
-	showPresetDropdown         bool   // Show preset dropdown menu
-	presetDropdownIndex        int    // Currently highlighted preset in dropdown
-	showSSHPoolSizeDropdown    bool   // Show SSH pool size dropdown menu
-	sshPoolSizeDropdownIndex   int    // Currently highlighted SSH pool size in dropdown
-	showLogLevelDropdown       bool   // Show log level dropdown menu
-	logLevelDropdownIndex      int    // Currently highlighted log level in dropdown
-	showKeepOriginalDropdown   bool   // Show keep original dropdown menu
-	keepOriginalDropdownIndex  int    // Currently highlighted keep original option in dropdown
-	showSkipChecksumDropdown   bool   // Show skip checksum dropdown menu
-	skipChecksumDropdownIndex  int    // Currently highlighted skip checksum option in dropdown
-	showSaveDiscardPrompt      bool   // Show save/discard prompt when config modified
-	saveDiscardPromptIndex     int    // Currently highlighted option (0=Save, 1=Discard)
+	isEditingSettings         bool
+	settingsInputs            []textinput.Model
+	validationError           string
+	configPath                string // Path to save config
+	showPresetDropdown        bool   // Show preset dropdown menu
+	presetDropdownIndex       int    // Currently highlighted preset in dropdown
+	showSSHPoolSizeDropdown   bool   // Show SSH pool size dropdown menu
+	sshPoolSizeDropdownIndex  int    // Currently highlighted SSH pool size in dropdown
+	showLogLevelDropdown      bool   // Show log level dropdown menu
+	logLevelDropdownIndex     int    // Currently highlighted log level in dropdown
+	showKeepOriginalDropdown  bool   // Show keep original dropdown menu
+	keepOriginalDropdownIndex int    // Currently highlighted keep original option in dropdown
+	showSkipChecksumDropdown  bool   // Show skip checksum dropdown menu
+	skipChecksumDropdownIndex int    // Currently highlighted skip checksum option in dropdown
+	showSaveDiscardPrompt     bool   // Show save/discard prompt when config modified
+	saveDiscardPromptIndex    int    // Currently highlighted option (0=Save, 1=Discard)
 
 	// Job actions
 	showJobActionDropdown  bool // Show job action dropdown menu
@@ -144,56 +145,49 @@ type Model struct {
 	priorityEditJobID      int64 // ID of job being edited
 
 	// Job search
-	searchMode          bool              // In search mode
-	searchInput         textinput.Model   // Search text input
+	searchMode          bool                  // In search mode
+	searchInput         textinput.Model       // Search text input
 	searchResults       []*types.TranscodeJob // Filtered jobs
-	searchSelectedIndex int               // Selected index in search results
+	searchSelectedIndex int                   // Selected index in search results
 
 	// Logs
 	logs            []string
 	maxLogs         int
 	logScrollOffset int
-	scannerLogPath  string
-	scannerLogPos   int64
-	mainLogPath     string
-	mainLogPos      int64
+	logChan         chan string // Channel to receive log entries from logging package
 }
 
 // New creates a new TUI model
 func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPool *transcode.WorkerPool) Model {
-	// Expand scanner log path
-	scannerLogPath := os.ExpandEnv(cfg.Logging.ScannerLog)
-	if strings.HasPrefix(scannerLogPath, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			scannerLogPath = strings.Replace(scannerLogPath, "~", home, 1)
-		}
-	}
+	// Create log channel for receiving log entries
+	logChan := make(chan string, 100)
 
-	// Expand main log path
-	mainLogPath := os.ExpandEnv(cfg.Logging.File)
-	if strings.HasPrefix(mainLogPath, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			mainLogPath = strings.Replace(mainLogPath, "~", home, 1)
+	// Subscribe to logging package
+	logging.Subscribe(func(entry logging.LogEntry) {
+		// Format and send to channel (non-blocking)
+		formatted := fmt.Sprintf("[%s] %s: %s",
+			entry.Timestamp.Format("2006-01-02 15:04:05"),
+			entry.Level,
+			entry.Message)
+		select {
+		case logChan <- formatted:
+		default:
+			// Channel full, drop oldest if needed
 		}
-	}
+	})
 
 	m := Model{
-		cfg:            cfg,
-		db:             db,
-		scanner:        scanner,
-		workerPool:     workerPool,
-		viewMode:       ViewDashboard,
-		lastUpdate:     time.Now(),
-		logs:           make([]string, 0),
-		maxLogs:        200,
-		scannerLogPath: scannerLogPath,
-		scannerLogPos:  0,
-		mainLogPath:    mainLogPath,
-		mainLogPos:     0,
-		progressData:   make(map[int64]*ProgressHistory),
-		configPath:     os.ExpandEnv("$HOME/transcoder/config.yaml"),
+		cfg:          cfg,
+		db:           db,
+		scanner:      scanner,
+		workerPool:   workerPool,
+		viewMode:     ViewDashboard,
+		lastUpdate:   time.Now(),
+		logs:         make([]string, 0),
+		maxLogs:      500,
+		logChan:      logChan,
+		progressData: make(map[int64]*ProgressHistory),
+		configPath:   os.ExpandEnv("$HOME/transcoder/config.yaml"),
 	}
 	m.initSettingsInputs()
 	m.initPriorityInput()
@@ -366,9 +360,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Tail log files
-		m.tailScannerLog()
-		m.tailMainLog()
+		// Drain log channel (receive all pending log entries)
+		for {
+			select {
+			case entry := <-m.logChan:
+				m.logs = append(m.logs, entry)
+				// Keep only the last maxLogs entries
+				if len(m.logs) > m.maxLogs {
+					m.logs = m.logs[len(m.logs)-m.maxLogs:]
+				}
+			default:
+				goto doneDraining
+			}
+		}
+	doneDraining:
 
 		return m, tickCmd()
 
@@ -713,7 +718,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleMouseClick processes mouse clicks and wheel events
 func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Handle mouse wheel scrolling
-	if msg.Type == tea.MouseWheelUp {
+	if msg.Button == tea.MouseButtonWheelUp {
 		switch m.viewMode {
 		case ViewLogs:
 			if m.logScrollOffset > 0 {
@@ -739,7 +744,7 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if msg.Type == tea.MouseWheelDown {
+	if msg.Button == tea.MouseButtonWheelDown {
 		switch m.viewMode {
 		case ViewLogs:
 			availableHeight := m.height - 7
@@ -783,7 +788,7 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Only handle left clicks below
-	if msg.Type != tea.MouseLeft {
+	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
 		return m, nil
 	}
 
@@ -1034,14 +1039,14 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Switch panels in Jobs view only
 		if m.viewMode == ViewJobs {
 			m.jobsPanel = (m.jobsPanel + 1) % 2
-			m.selectedJob = 0  // Reset selection when switching panels
+			m.selectedJob = 0 // Reset selection when switching panels
 		}
 
 	case "up", "k":
 		if m.selectedJob > 0 {
 			m.selectedJob--
 			// Adjust scroll offset if needed
-			if scrollOffset != nil && m.selectedJob < *scrollOffset {
+			if m.selectedJob < *scrollOffset {
 				*scrollOffset = m.selectedJob
 			}
 		}
@@ -1050,11 +1055,9 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selectedJob < len(jobs)-1 {
 			m.selectedJob++
 			// Adjust scroll offset if needed (calculate visible height)
-			if scrollOffset != nil {
-				visibleHeight := m.calculateVisibleJobsHeight()
-				if m.selectedJob >= *scrollOffset+visibleHeight {
-					*scrollOffset = m.selectedJob - visibleHeight + 1
-				}
+			visibleHeight := m.calculateVisibleJobsHeight()
+			if m.selectedJob >= *scrollOffset+visibleHeight {
+				*scrollOffset = m.selectedJob - visibleHeight + 1
 			}
 		}
 
@@ -1276,7 +1279,7 @@ func (m *Model) bulkCancelJobs() int {
 			// For queued jobs, cancel directly in DB
 			// For active jobs, signal the worker pool
 			if job.Status == types.StatusQueued {
-				m.db.CancelJob(job.ID)
+				_ = m.db.CancelJob(job.ID)
 			} else {
 				m.workerPool.CancelJob(job.ID)
 			}
@@ -1461,7 +1464,7 @@ func (m *Model) executeJobAction(job *types.TranscodeJob, action string) {
 		m.statusMsg = fmt.Sprintf("Pausing job #%d", job.ID)
 
 	case "resume":
-		m.db.ResumeJob(job.ID)
+		_ = m.db.ResumeJob(job.ID)
 		m.statusMsg = fmt.Sprintf("Resuming job #%d", job.ID)
 
 	case "cancel":
@@ -1633,21 +1636,23 @@ func (m *Model) applySettingValue(index int) error {
 		m.configModified = true
 
 	case 11: // Keep Original
-		if value == "Yes" {
+		switch value {
+		case "Yes":
 			m.cfg.Files.KeepOriginal = true
-		} else if value == "No" {
+		case "No":
 			m.cfg.Files.KeepOriginal = false
-		} else {
+		default:
 			return fmt.Errorf("keep original must be Yes or No")
 		}
 		m.configModified = true
 
 	case 12: // Skip Checksum
-		if value == "Yes" {
+		switch value {
+		case "Yes":
 			m.cfg.Workers.SkipChecksumVerification = true
-		} else if value == "No" {
+		case "No":
 			m.cfg.Workers.SkipChecksumVerification = false
-		} else {
+		default:
 			return fmt.Errorf("skip checksum must be Yes or No")
 		}
 		m.configModified = true
@@ -2220,10 +2225,6 @@ var (
 			MarginBottom(2).
 			MarginRight(2)
 
-	selectedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205")).
-			Bold(true)
-
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240")).
 			Italic(true)
@@ -2252,20 +2253,6 @@ func formatBytes(bytes int64) string {
 	}
 }
 
-func formatDuration(seconds int) string {
-	d := time.Duration(seconds) * time.Second
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	s := int(d.Seconds()) % 60
-
-	if h > 0 {
-		return fmt.Sprintf("%dh %dm %ds", h, m, s)
-	} else if m > 0 {
-		return fmt.Sprintf("%dm %ds", m, s)
-	}
-	return fmt.Sprintf("%ds", s)
-}
-
 func formatProgress(progress float64, stage types.ProcessingStage) string {
 	bar := coloredProgressBar(progress, 20, stage)
 	return fmt.Sprintf("[%s] %.1f%%", bar, progress)
@@ -2276,16 +2263,6 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-func progressBar(progress float64, width int) string {
-	filled := int(progress / 100 * float64(width))
-	if filled > width {
-		filled = width
-	}
-	empty := width - filled
-
-	return strings.Repeat("█", filled) + strings.Repeat("░", empty)
 }
 
 // coloredProgressBar creates a colored progress bar based on the stage
@@ -2349,114 +2326,6 @@ func (m *Model) addLog(level, message string) {
 	logEntry := fmt.Sprintf("[%s] %s: %s", timestamp, level, message)
 
 	m.logs = append(m.logs, logEntry)
-
-	// Keep only the last maxLogs entries
-	if len(m.logs) > m.maxLogs {
-		m.logs = m.logs[len(m.logs)-m.maxLogs:]
-	}
-}
-
-// tailScannerLog reads new lines from the scanner log file and adds them to logs
-func (m *Model) tailScannerLog() {
-	// Check if log file exists
-	fileInfo, err := os.Stat(m.scannerLogPath)
-	if err != nil {
-		return // File doesn't exist yet
-	}
-
-	// Check if file has shrunk (rotated or truncated)
-	if fileInfo.Size() < m.scannerLogPos {
-		m.scannerLogPos = 0
-	}
-
-	// Open file
-	file, err := os.Open(m.scannerLogPath)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-
-	// Seek to last position
-	_, err = file.Seek(m.scannerLogPos, 0)
-	if err != nil {
-		return
-	}
-
-	// Read new content
-	content := make([]byte, fileInfo.Size()-m.scannerLogPos)
-	n, err := file.Read(content)
-	if err != nil && n == 0 {
-		return
-	}
-
-	// Update position
-	m.scannerLogPos += int64(n)
-
-	// Split into lines and add to logs
-	lines := strings.Split(string(content[:n]), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			// Add line directly (it already has timestamp and level from scanner)
-			m.logs = append(m.logs, line)
-		}
-	}
-
-	// Keep only the last maxLogs entries
-	if len(m.logs) > m.maxLogs {
-		m.logs = m.logs[len(m.logs)-m.maxLogs:]
-	}
-}
-
-// tailMainLog reads new lines from the main log file and adds them to logs
-func (m *Model) tailMainLog() {
-	if m.mainLogPath == "" {
-		return
-	}
-
-	// Check if log file exists
-	fileInfo, err := os.Stat(m.mainLogPath)
-	if err != nil {
-		return // File doesn't exist yet
-	}
-
-	// Check if file has shrunk (rotated or truncated)
-	if fileInfo.Size() < m.mainLogPos {
-		m.mainLogPos = 0
-	}
-
-	// Open file
-	file, err := os.Open(m.mainLogPath)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-
-	// Seek to last position
-	_, err = file.Seek(m.mainLogPos, 0)
-	if err != nil {
-		return
-	}
-
-	// Read new content
-	content := make([]byte, fileInfo.Size()-m.mainLogPos)
-	n, err := file.Read(content)
-	if err != nil && n == 0 {
-		return
-	}
-
-	// Update position
-	m.mainLogPos += int64(n)
-
-	// Split into lines and add to logs
-	lines := strings.Split(string(content[:n]), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			// Add line directly (it already has timestamp and level)
-			m.logs = append(m.logs, line)
-		}
-	}
 
 	// Keep only the last maxLogs entries
 	if len(m.logs) > m.maxLogs {

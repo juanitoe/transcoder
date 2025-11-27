@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,27 +19,27 @@ type FFprobeOutput struct {
 }
 
 type FFprobeFormat struct {
-	Filename   string            `json:"filename"`
-	Size       string            `json:"size"`
-	Duration   string            `json:"duration"`
-	BitRate    string            `json:"bit_rate"`
-	Tags       map[string]string `json:"tags"`
+	Filename string            `json:"filename"`
+	Size     string            `json:"size"`
+	Duration string            `json:"duration"`
+	BitRate  string            `json:"bit_rate"`
+	Tags     map[string]string `json:"tags"`
 }
 
 type FFprobeStream struct {
-	Index              int               `json:"index"`
-	CodecName          string            `json:"codec_name"`
-	CodecLongName      string            `json:"codec_long_name"`
-	CodecType          string            `json:"codec_type"` // video, audio, subtitle
-	Width              int               `json:"width"`
-	Height             int               `json:"height"`
-	AvgFrameRate       string            `json:"avg_frame_rate"`
-	RFrameRate         string            `json:"r_frame_rate"`
-	BitRate            string            `json:"bit_rate"`
-	Duration           string            `json:"duration"`
-	Tags               map[string]string `json:"tags"`
-	ChannelLayout      string            `json:"channel_layout"`
-	Channels           int               `json:"channels"`
+	Index         int               `json:"index"`
+	CodecName     string            `json:"codec_name"`
+	CodecLongName string            `json:"codec_long_name"`
+	CodecType     string            `json:"codec_type"` // video, audio, subtitle
+	Width         int               `json:"width"`
+	Height        int               `json:"height"`
+	AvgFrameRate  string            `json:"avg_frame_rate"`
+	RFrameRate    string            `json:"r_frame_rate"`
+	BitRate       string            `json:"bit_rate"`
+	Duration      string            `json:"duration"`
+	Tags          map[string]string `json:"tags"`
+	ChannelLayout string            `json:"channel_layout"`
+	Channels      int               `json:"channels"`
 }
 
 // ExtractMetadataWithFFprobe extracts full metadata from a video file using ffprobe
@@ -54,7 +53,7 @@ func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SSH session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Escape single quotes in the path and wrap in single quotes
 	escapedPath := strings.ReplaceAll(filePath, "'", "'\\''")
@@ -79,10 +78,10 @@ func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath strin
 
 	// Extract metadata
 	mediaFile := &types.MediaFile{
-		FilePath:      filePath,
-		FileName:      filepath.Base(filePath),
-		DiscoveredAt:  time.Now(),
-		UpdatedAt:     time.Now(),
+		FilePath:     filePath,
+		FileName:     filepath.Base(filePath),
+		DiscoveredAt: time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
 	// Parse file size
@@ -254,15 +253,4 @@ func parseFPS(fpsStr string) (float64, error) {
 	}
 
 	return numerator / denominator, nil
-}
-
-// expandPath expands ~ to home directory
-func expandPath(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return filepath.Join(home, path[2:])
-		}
-	}
-	return path
 }

@@ -24,11 +24,11 @@ type RemoteConfig struct {
 	User           string   `yaml:"user"`
 	SSHKey         string   `yaml:"ssh_key"`
 	MediaPaths     []string `yaml:"media_paths"`
-	Port           int      `yaml:"port"`              // Default 22
-	SSHPoolSize    int      `yaml:"ssh_pool_size"`     // SSH connection pool size per worker (default 4)
-	SSHTimeout     int      `yaml:"ssh_timeout"`       // SSH connection timeout in seconds (default 30)
-	SSHKeepalive   int      `yaml:"ssh_keepalive"`     // SSH keepalive interval in seconds (default 0 = disabled)
-	SFTPBufferSize int      `yaml:"sftp_buffer_size"`  // SFTP buffer size in bytes (default 32768, 0 = use default)
+	Port           int      `yaml:"port"`             // Default 22
+	SSHPoolSize    int      `yaml:"ssh_pool_size"`    // SSH connection pool size per worker (default 4)
+	SSHTimeout     int      `yaml:"ssh_timeout"`      // SSH connection timeout in seconds (default 30)
+	SSHKeepalive   int      `yaml:"ssh_keepalive"`    // SSH keepalive interval in seconds (default 0 = disabled)
+	SFTPBufferSize int      `yaml:"sftp_buffer_size"` // SFTP buffer size in bytes (default 32768, 0 = use default)
 }
 
 // EncoderConfig contains video encoding settings
@@ -42,18 +42,18 @@ type EncoderConfig struct {
 
 // WorkersConfig contains worker pool settings
 type WorkersConfig struct {
-	MaxWorkers               int  `yaml:"max_workers"`                 // Maximum concurrent workers
-	WorkDir                  string `yaml:"work_dir"`                  // Temporary work directory
-	SkipChecksumVerification bool `yaml:"skip_checksum_verification"` // Skip checksum verification (faster but less safe, default false)
+	MaxWorkers               int    `yaml:"max_workers"`                // Maximum concurrent workers
+	WorkDir                  string `yaml:"work_dir"`                   // Temporary work directory
+	SkipChecksumVerification bool   `yaml:"skip_checksum_verification"` // Skip checksum verification (faster but less safe, default false)
 }
 
 // FileConfig contains file handling settings
 type FileConfig struct {
-	Extensions      []string `yaml:"extensions"`        // File extensions to process (default: mkv, mp4, avi, m4v, ts)
-	MinSizeBytes    int64    `yaml:"min_size_bytes"`    // Minimum file size to process in bytes (default 0 = no minimum)
-	ExcludePatterns []string `yaml:"exclude_patterns"`  // Glob patterns to exclude from scanning
-	FollowSymlinks  bool     `yaml:"follow_symlinks"`   // Follow symbolic links during scanning (default false)
-	KeepOriginal    bool     `yaml:"keep_original"`     // Keep original file after transcoding (default false)
+	Extensions      []string `yaml:"extensions"`       // File extensions to process (default: mkv, mp4, avi, m4v, ts)
+	MinSizeBytes    int64    `yaml:"min_size_bytes"`   // Minimum file size to process in bytes (default 0 = no minimum)
+	ExcludePatterns []string `yaml:"exclude_patterns"` // Glob patterns to exclude from scanning
+	FollowSymlinks  bool     `yaml:"follow_symlinks"`  // Follow symbolic links during scanning (default false)
+	KeepOriginal    bool     `yaml:"keep_original"`    // Keep original file after transcoding (default false)
 }
 
 // DatabaseConfig contains database settings
@@ -63,9 +63,9 @@ type DatabaseConfig struct {
 
 // LoggingConfig contains logging settings
 type LoggingConfig struct {
-	Level           string `yaml:"level"`             // debug, info, warn, error (default info)
-	File            string `yaml:"file"`              // Log file path
-	ScannerLog      string `yaml:"scanner_log"`       // Scanner debug log file path
+	Level           string `yaml:"level"`              // debug, info, warn, error (default info)
+	File            string `yaml:"file"`               // Log file path
+	ScannerLog      string `yaml:"scanner_log"`        // Scanner debug log file path
 	MaxLogSizeBytes int64  `yaml:"max_log_size_bytes"` // Maximum log file size before rotation in bytes (default 104857600 = 100MB)
 }
 

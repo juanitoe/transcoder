@@ -51,7 +51,7 @@ func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
 		if err := s.Connect(ctx); err != nil {
 			return errorMsg("Failed to connect to remote server: " + err.Error())
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		// Create a channel for progress updates
 		progressChan := make(chan scanner.ScanProgress, 100)
