@@ -357,6 +357,10 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		var mediaFile *types.MediaFile
 		mediaFile, _ = w.db.GetMediaFileByPath(job.FilePath)
 		if mediaFile != nil {
+			logging.Debug("[%s] Job %d pre-check: codec=%s bitrate=%d kbps resolution=%dx%d",
+				workerID, job.ID, mediaFile.Codec, mediaFile.BitrateKbps,
+				mediaFile.ResolutionWidth, mediaFile.ResolutionHeight)
+
 			estimatedSavings, shouldProceed, reason := EstimateTranscodingSavings(
 				mediaFile.Codec,
 				mediaFile.BitrateKbps,
@@ -375,6 +379,8 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				return
 			}
 			logging.Info("[%s] Job %d proceeding: %s", workerID, job.ID, reason)
+		} else {
+			logging.Warn("[%s] Job %d: Could not get media file info for pre-transcode check, proceeding anyway", workerID, job.ID)
 		}
 
 		w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
