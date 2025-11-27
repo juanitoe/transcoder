@@ -155,6 +155,8 @@ type Model struct {
 	logScrollOffset int
 	scannerLogPath  string
 	scannerLogPos   int64
+	mainLogPath     string
+	mainLogPos      int64
 }
 
 // New creates a new TUI model
@@ -165,6 +167,15 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 		home, err := os.UserHomeDir()
 		if err == nil {
 			scannerLogPath = strings.Replace(scannerLogPath, "~", home, 1)
+		}
+	}
+
+	// Expand main log path
+	mainLogPath := os.ExpandEnv(cfg.Logging.File)
+	if strings.HasPrefix(mainLogPath, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			mainLogPath = strings.Replace(mainLogPath, "~", home, 1)
 		}
 	}
 
@@ -179,6 +190,8 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 		maxLogs:        200,
 		scannerLogPath: scannerLogPath,
 		scannerLogPos:  0,
+		mainLogPath:    mainLogPath,
+		mainLogPos:     0,
 		progressData:   make(map[int64]*ProgressHistory),
 		configPath:     os.ExpandEnv("$HOME/transcoder/config.yaml"),
 	}
@@ -353,8 +366,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Tail scanner log file
+		// Tail log files
 		m.tailScannerLog()
+		m.tailMainLog()
 
 		return m, tickCmd()
 
@@ -2384,6 +2398,62 @@ func (m *Model) tailScannerLog() {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			// Add line directly (it already has timestamp and level from scanner)
+			m.logs = append(m.logs, line)
+		}
+	}
+
+	// Keep only the last maxLogs entries
+	if len(m.logs) > m.maxLogs {
+		m.logs = m.logs[len(m.logs)-m.maxLogs:]
+	}
+}
+
+// tailMainLog reads new lines from the main log file and adds them to logs
+func (m *Model) tailMainLog() {
+	if m.mainLogPath == "" {
+		return
+	}
+
+	// Check if log file exists
+	fileInfo, err := os.Stat(m.mainLogPath)
+	if err != nil {
+		return // File doesn't exist yet
+	}
+
+	// Check if file has shrunk (rotated or truncated)
+	if fileInfo.Size() < m.mainLogPos {
+		m.mainLogPos = 0
+	}
+
+	// Open file
+	file, err := os.Open(m.mainLogPath)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	// Seek to last position
+	_, err = file.Seek(m.mainLogPos, 0)
+	if err != nil {
+		return
+	}
+
+	// Read new content
+	content := make([]byte, fileInfo.Size()-m.mainLogPos)
+	n, err := file.Read(content)
+	if err != nil && n == 0 {
+		return
+	}
+
+	// Update position
+	m.mainLogPos += int64(n)
+
+	// Split into lines and add to logs
+	lines := strings.Split(string(content[:n]), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			// Add line directly (it already has timestamp and level)
 			m.logs = append(m.logs, line)
 		}
 	}
