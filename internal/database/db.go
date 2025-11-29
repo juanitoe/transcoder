@@ -823,7 +823,8 @@ func (db *DB) RecoverJobs() (int, error) {
 }
 
 // QueueJobsForTranscoding creates transcode jobs for all media files
-// that should be transcoded but don't already have a job
+// that should be transcoded but don't already have a job.
+// Pass limit <= 0 to queue all eligible files.
 func (db *DB) QueueJobsForTranscoding(limit int) (int, error) {
 	// Find media files that need transcoding and don't have existing jobs
 	// Exclude completed, canceled, and failed jobs to allow re-queueing of failed files
@@ -835,10 +836,16 @@ func (db *DB) QueueJobsForTranscoding(limit int) (int, error) {
 		WHERE mf.should_transcode = 1
 		    AND tj.id IS NULL
 		ORDER BY mf.transcoding_priority DESC, mf.file_size_bytes DESC
-		LIMIT ?
 	`
 
-	rows, err := db.conn.Query(query, limit)
+	var rows *sql.Rows
+	var err error
+	if limit > 0 {
+		query += " LIMIT ?"
+		rows, err = db.conn.Query(query, limit)
+	} else {
+		rows, err = db.conn.Query(query)
+	}
 	if err != nil {
 		return 0, err
 	}

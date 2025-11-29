@@ -1101,7 +1101,7 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		// Add/Queue jobs for transcoding (only in Jobs view)
 		if m.viewMode == ViewJobs {
-			count, err := m.db.QueueJobsForTranscoding(100)
+			count, err := m.db.QueueJobsForTranscoding(0) // 0 = queue all eligible files
 			if err != nil {
 				m.errorMsg = fmt.Sprintf("Failed to queue jobs: %v", err)
 			} else {
