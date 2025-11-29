@@ -211,10 +211,19 @@ func (m Model) renderJobs() string {
 		return m.renderSearchView()
 	}
 
+	// Apply path filter to jobs
+	filteredActiveJobs := m.filterJobsByPath(m.activeJobs)
+	filteredQueuedJobs := m.filterJobsByPath(m.queuedJobs)
+
 	visibleHeight := m.calculateVisibleJobsHeight()
 	boxWidth := m.width - 4 // Full width minus margins
 
-	// Create clickable tab-style panel switcher
+	// Create clickable tab-style panel switcher with filter indicator
+	filterIndicator := ""
+	if m.jobPathFilter != "" {
+		filterIndicator = fmt.Sprintf(" [%s]", strings.ToUpper(m.jobPathFilter))
+	}
+
 	activeTabStyle := headerStyle
 	queuedTabStyle := statusStyle
 
@@ -228,6 +237,8 @@ func (m Model) renderJobs() string {
 		activeTabStyle.Render(" 🎬 Active Jobs "),
 		"  ",
 		queuedTabStyle.Render(" 📋 Queued Jobs "),
+		"  ",
+		statusStyle.Render(filterIndicator),
 	)
 
 	// Adjust filename truncation based on box width
@@ -248,24 +259,24 @@ func (m Model) renderJobs() string {
 	// Render the active panel
 	if m.jobsPanel == 0 {
 		// Active Jobs Panel
-		if len(m.activeJobs) == 0 {
+		if len(filteredActiveJobs) == 0 {
 			panelContent = statusStyle.Render("No active jobs")
 		} else {
-			panelContent = fmt.Sprintf("Total: %d\n\n", len(m.activeJobs))
+			panelContent = fmt.Sprintf("Total: %d\n\n", len(filteredActiveJobs))
 
 			// Calculate visible window
 			startIdx := m.activeJobsScrollOffset
 			endIdx := startIdx + visibleHeight
-			if endIdx > len(m.activeJobs) {
-				endIdx = len(m.activeJobs)
+			if endIdx > len(filteredActiveJobs) {
+				endIdx = len(filteredActiveJobs)
 			}
-			if startIdx >= len(m.activeJobs) {
-				startIdx = max(0, len(m.activeJobs)-visibleHeight)
+			if startIdx >= len(filteredActiveJobs) {
+				startIdx = max(0, len(filteredActiveJobs)-visibleHeight)
 			}
 
 			// Render visible jobs
 			for i := startIdx; i < endIdx; i++ {
-				job := m.activeJobs[i]
+				job := filteredActiveJobs[i]
 				prefix := "  "
 				isSelected := (m.jobsPanel == 0 && i == m.selectedJob)
 
@@ -317,31 +328,31 @@ func (m Model) renderJobs() string {
 			}
 
 			// Add scroll indicator if needed
-			if len(m.activeJobs) > visibleHeight {
-				panelContent += "\n" + helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.activeJobs)))
+			if len(filteredActiveJobs) > visibleHeight {
+				panelContent += "\n" + helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(filteredActiveJobs)))
 			}
 		}
 	} else {
 		// Queued Jobs Panel
-		if len(m.queuedJobs) == 0 {
+		if len(filteredQueuedJobs) == 0 {
 			panelContent = statusStyle.Render("No queued jobs\n\n")
 			panelContent += "Press [a] to queue jobs"
 		} else {
-			panelContent = fmt.Sprintf("Total: %d\n\n", len(m.queuedJobs))
+			panelContent = fmt.Sprintf("Total: %d\n\n", len(filteredQueuedJobs))
 
 			// Calculate visible window
 			startIdx := m.queuedJobsScrollOffset
 			endIdx := startIdx + visibleHeight
-			if endIdx > len(m.queuedJobs) {
-				endIdx = len(m.queuedJobs)
+			if endIdx > len(filteredQueuedJobs) {
+				endIdx = len(filteredQueuedJobs)
 			}
-			if startIdx >= len(m.queuedJobs) {
-				startIdx = max(0, len(m.queuedJobs)-visibleHeight)
+			if startIdx >= len(filteredQueuedJobs) {
+				startIdx = max(0, len(filteredQueuedJobs)-visibleHeight)
 			}
 
 			// Render visible jobs
 			for i := startIdx; i < endIdx; i++ {
-				job := m.queuedJobs[i]
+				job := filteredQueuedJobs[i]
 				prefix := "  "
 				isSelected := (m.jobsPanel == 1 && i == m.selectedJob)
 
@@ -363,8 +374,8 @@ func (m Model) renderJobs() string {
 			}
 
 			// Add scroll indicator if needed
-			if len(m.queuedJobs) > visibleHeight {
-				panelContent += "\n" + helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(m.queuedJobs)))
+			if len(filteredQueuedJobs) > visibleHeight {
+				panelContent += "\n" + helpStyle.Render(fmt.Sprintf("(Showing %d-%d of %d)", startIdx+1, endIdx, len(filteredQueuedJobs)))
 			}
 		}
 	}
@@ -378,7 +389,7 @@ func (m Model) renderJobs() string {
 		helpText := ""
 		return jobsBox + helpText
 	} else {
-		helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [Enter] Actions menu  •  [/] search")
+		helpText := "\n" + helpStyle.Render("[Tab] switch panels  •  ↑/↓ navigate  •  [a] add  •  [f] filter  •  [Enter] Actions  •  [/] search")
 		return jobsBox + helpText
 	}
 }

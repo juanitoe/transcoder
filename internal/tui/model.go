@@ -111,7 +111,8 @@ type Model struct {
 	selectedSetting        int
 	statusMsg              string
 	errorMsg               string
-	jobsPanel              int // 0=active jobs, 1=queued jobs
+	jobsPanel              int    // 0=active jobs, 1=queued jobs
+	jobPathFilter          string // "", "movies", "tv" - filter jobs by path
 	activeJobsScrollOffset int
 	queuedJobsScrollOffset int
 
@@ -1109,6 +1110,12 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.addLog("INFO", fmt.Sprintf("Queued %d jobs", count))
 				m.refreshData()
 			}
+		}
+
+	case "f":
+		// Filter jobs by path (Movies/TV) - only in Jobs view
+		if m.viewMode == ViewJobs && !m.searchMode {
+			m.cycleJobFilter()
 		}
 
 	case "d":
@@ -2180,6 +2187,48 @@ func (m *Model) refreshData() {
 	}
 
 	m.lastUpdate = time.Now()
+}
+
+// filterJobsByPath filters jobs based on the current jobPathFilter
+func (m *Model) filterJobsByPath(jobs []*types.TranscodeJob) []*types.TranscodeJob {
+	if m.jobPathFilter == "" {
+		return jobs
+	}
+
+	filtered := make([]*types.TranscodeJob, 0, len(jobs))
+	for _, job := range jobs {
+		pathLower := strings.ToLower(job.FilePath)
+		switch m.jobPathFilter {
+		case "movies":
+			if strings.Contains(pathLower, "/movies/") || strings.Contains(pathLower, "/movie/") {
+				filtered = append(filtered, job)
+			}
+		case "tv":
+			if strings.Contains(pathLower, "/tv/") || strings.Contains(pathLower, "/tv shows/") || strings.Contains(pathLower, "/series/") {
+				filtered = append(filtered, job)
+			}
+		}
+	}
+	return filtered
+}
+
+// cycleJobFilter cycles through job filters: all -> movies -> tv -> all
+func (m *Model) cycleJobFilter() {
+	switch m.jobPathFilter {
+	case "":
+		m.jobPathFilter = "movies"
+		m.statusMsg = "Filter: Movies only"
+	case "movies":
+		m.jobPathFilter = "tv"
+		m.statusMsg = "Filter: TV Shows only"
+	case "tv":
+		m.jobPathFilter = ""
+		m.statusMsg = "Filter: All"
+	}
+	// Reset scroll and selection when filter changes
+	m.selectedJob = 0
+	m.activeJobsScrollOffset = 0
+	m.queuedJobsScrollOffset = 0
 }
 
 // calculateVisibleJobsHeight calculates how many job items can fit in the Jobs view
