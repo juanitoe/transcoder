@@ -2151,8 +2151,8 @@ func (m *Model) refreshData() {
 		m.errorMsg = fmt.Sprintf("Failed to get active jobs: %v", err)
 	}
 
-	// Get queued jobs
-	m.queuedJobs, err = m.db.GetQueuedJobs(100)
+	// Get queued jobs (0 = no limit)
+	m.queuedJobs, err = m.db.GetQueuedJobs(0)
 	if err != nil {
 		m.errorMsg = fmt.Sprintf("Failed to get queued jobs: %v", err)
 	}
