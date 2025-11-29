@@ -386,8 +386,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		_ = w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
 		w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding", 0, 0)
 
-		// Start a goroutine to periodically update file size
+		// Start a goroutine to periodically update file size and check for early termination
 		fileSizeDone := make(chan bool)
+		sizeExceeded := make(chan int64, 1) // Buffered to avoid blocking
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
@@ -399,7 +400,19 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				case <-ticker.C:
 					// Check output file size
 					if fileInfo, err := os.Stat(localOutputPath); err == nil {
-						_ = w.db.UpdateJobFileSize(job.ID, fileInfo.Size())
+						currentSize := fileInfo.Size()
+						_ = w.db.UpdateJobFileSize(job.ID, currentSize)
+
+						// Early termination: if output already exceeds original, stop transcoding
+						if !w.cfg.Encoder.AllowLargerOutput && currentSize > job.FileSizeBytes {
+							select {
+							case sizeExceeded <- currentSize:
+								jobCancel() // Cancel the transcode
+							default:
+								// Already sent, don't block
+							}
+							return
+						}
 					}
 				}
 			}
@@ -422,13 +435,27 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 		close(fileSizeDone)
 
+		// Check if cancelled due to size exceeded (early termination)
+		select {
+		case exceededSize := <-sizeExceeded:
+			sizeIncrease := float64(exceededSize-job.FileSizeBytes) / float64(job.FileSizeBytes) * 100
+			reason := fmt.Sprintf("Transcoded file exceeded original during encoding (%.1f%% larger at %d bytes, original %d bytes)",
+				sizeIncrease, exceededSize, job.FileSizeBytes)
+			logging.Info("[%s] Job %d skipped (early termination): %s", workerID, job.ID, reason)
+			_ = w.db.SkipJob(job.ID, reason, exceededSize)
+			// Clean up partial output file
+			_ = os.Remove(localOutputPath)
+			return
+		default:
+		}
+
 		if err != nil {
 			logging.Error("[%s] Job %d failed: Transcode failed: %v", workerID, job.ID, err)
 			_ = w.db.FailJob(job.ID, fmt.Sprintf("Transcode failed: %v", err))
 			return
 		}
 
-		// Check if cancelled
+		// Check if cancelled (pause/cancel request)
 		select {
 		case <-jobCtx.Done():
 			return
