@@ -11,6 +11,11 @@ encoder:
   codec: hevc_videotoolbox
   quality: 75
   preset: medium
+  min_expected_savings: 10  # Minimum expected size reduction % to attempt transcode
+
+scanner:
+  auto_scan_interval_hours: 0   # Hours between automatic scans (0 = disabled)
+  auto_queue_after_scan: false  # Automatically queue jobs after scan completes
 
 workers:
   max_workers: 2
