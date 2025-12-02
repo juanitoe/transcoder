@@ -14,8 +14,15 @@ type Config struct {
 	Encoder  EncoderConfig  `yaml:"encoder"`
 	Workers  WorkersConfig  `yaml:"workers"`
 	Files    FileConfig     `yaml:"files"`
+	Scanner  ScannerConfig  `yaml:"scanner"`
 	Database DatabaseConfig `yaml:"database"`
 	Logging  LoggingConfig  `yaml:"logging"`
+}
+
+// ScannerConfig contains scanner settings
+type ScannerConfig struct {
+	AutoScanIntervalHours int  `yaml:"auto_scan_interval_hours"` // Hours between automatic scans (0 = disabled, default 0)
+	AutoQueueAfterScan    bool `yaml:"auto_queue_after_scan"`    // Automatically queue jobs after scan completes (default false)
 }
 
 // RemoteConfig contains remote server settings

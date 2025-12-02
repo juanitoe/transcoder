@@ -14,8 +14,9 @@ import (
 // Messages
 
 type tickMsg time.Time
+type autoScanTickMsg time.Time
 type progressMsg types.ProgressUpdate
-type scanCompleteMsg struct{}
+type scanCompleteMsg struct{ autoQueued int } // autoQueued > 0 if jobs were auto-queued
 type scanProgressMsg scanner.ScanProgress
 type errorMsg string
 
@@ -25,6 +26,16 @@ type errorMsg string
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+// autoScanTickCmd returns a command that sends a tick for auto-scanning
+func autoScanTickCmd(intervalHours int) tea.Cmd {
+	if intervalHours <= 0 {
+		return nil
+	}
+	return tea.Tick(time.Duration(intervalHours)*time.Hour, func(t time.Time) tea.Msg {
+		return autoScanTickMsg(t)
 	})
 }
 
@@ -43,7 +54,8 @@ func listenForProgress(wp *transcode.WorkerPool) tea.Cmd {
 }
 
 // scanLibrary returns a command that scans the remote library
-func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
+// If autoQueue is true, automatically queues jobs after scan completes
+func scanLibrary(s *scanner.Scanner, db *database.DB, autoQueue bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 
@@ -77,6 +89,15 @@ func scanLibrary(s *scanner.Scanner, db *database.DB) tea.Cmd {
 			return errorMsg("Scan failed: " + err.Error())
 		}
 
-		return scanCompleteMsg{}
+		// Auto-queue jobs if requested
+		autoQueued := 0
+		if autoQueue {
+			count, err := db.QueueJobsForTranscoding(0)
+			if err == nil {
+				autoQueued = count
+			}
+		}
+
+		return scanCompleteMsg{autoQueued: autoQueued}
 	}
 }

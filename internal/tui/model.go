@@ -323,11 +323,18 @@ func (m *Model) initSearchInput() {
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		tea.EnterAltScreen,
 		tickCmd(),
 		listenForProgress(m.workerPool),
-	)
+	}
+
+	// Start auto-scan timer if configured
+	if m.cfg.Scanner.AutoScanIntervalHours > 0 {
+		cmds = append(cmds, autoScanTickCmd(m.cfg.Scanner.AutoScanIntervalHours))
+	}
+
+	return tea.Batch(cmds...)
 }
 
 // Update handles messages
@@ -378,6 +385,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tickCmd()
 
+	case autoScanTickMsg:
+		// Periodic auto-scan triggered
+		if !m.scanning {
+			m.scanning = true
+			m.statusMsg = "Starting automatic periodic scan..."
+			m.addLog("INFO", "Starting automatic periodic scan")
+			return m, tea.Batch(
+				scanLibrary(m.scanner, m.db, m.cfg.Scanner.AutoQueueAfterScan),
+				autoScanTickCmd(m.cfg.Scanner.AutoScanIntervalHours),
+			)
+		}
+		// If already scanning, reschedule
+		return m, autoScanTickCmd(m.cfg.Scanner.AutoScanIntervalHours)
+
 	case progressMsg:
 		// Handle progress update from workers
 		update := types.ProgressUpdate(msg)
@@ -405,10 +426,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanCompleteMsg:
 		m.scanning = false
-		m.statusMsg = fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated",
-			m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated)
-		m.addLog("INFO", fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated",
-			m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated))
+		if msg.autoQueued > 0 {
+			m.statusMsg = fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated, %d jobs auto-queued",
+				m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated, msg.autoQueued)
+			m.addLog("INFO", fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated, %d jobs auto-queued",
+				m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated, msg.autoQueued))
+		} else {
+			m.statusMsg = fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated",
+				m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated)
+			m.addLog("INFO", fmt.Sprintf("Scan complete: %d files scanned, %d added, %d updated",
+				m.scanProgress.FilesScanned, m.scanProgress.FilesAdded, m.scanProgress.FilesUpdated))
+		}
 		m.refreshData()
 		return m, nil
 
@@ -708,7 +736,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Starting scan..."
 			m.errorMsg = "" // Clear any previous errors
 			m.addLog("INFO", "Starting library scan")
-			return m, scanLibrary(m.scanner, m.db)
+			return m, scanLibrary(m.scanner, m.db, false) // Manual scan doesn't auto-queue
 		}
 		return m, nil
 	}
