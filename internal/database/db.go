@@ -612,9 +612,18 @@ func (db *DB) CompleteJobWithChecksums(jobID int64, outputSize int64, encodingTi
 	return tx.Commit()
 }
 
-// FailJob marks a job as failed
+// FailJob marks a job as failed. After 3 failures, sets should_transcode=0 to prevent endless retries.
 func (db *DB) FailJob(jobID int64, errorMsg string) error {
-	_, err := db.conn.Exec(`
+	const maxRetries = 3
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Update job status and increment retry count
+	_, err = tx.Exec(`
 		UPDATE transcode_jobs
 		SET status = 'failed',
 		    error_message = ?,
@@ -624,8 +633,31 @@ func (db *DB) FailJob(jobID int64, errorMsg string) error {
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, errorMsg, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to update job: %w", err)
+	}
 
-	return err
+	// Check if we've hit max retries - if so, disable further transcoding attempts
+	var retryCount int
+	err = tx.QueryRow(`SELECT retry_count FROM transcode_jobs WHERE id = ?`, jobID).Scan(&retryCount)
+	if err != nil {
+		return fmt.Errorf("failed to get retry count: %w", err)
+	}
+
+	if retryCount >= maxRetries {
+		// Permanently disable transcoding for this file
+		_, err = tx.Exec(`
+			UPDATE media_files
+			SET should_transcode = 0,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+		`, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to disable transcoding: %w", err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 // SkipJob marks a job as skipped and sets should_transcode=0 to prevent re-adding
