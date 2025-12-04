@@ -9,7 +9,7 @@ A TUI-based media transcoder that scans remote libraries via SSH/SFTP, queues fi
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    TUI (Bubble Tea)                     │
-│  Dashboard │ Jobs │ Files │ Settings │ Logs            │
+│  Dashboard │ Jobs │ Settings │ Scanner │ Logs          │
 └─────────────────────┬───────────────────────────────────┘
                       │
 ┌─────────────────────┼───────────────────────────────────┐
@@ -268,7 +268,7 @@ flowchart TD
 ### Key Optimizations
 
 1. **SSH Connection Pool**
-   - Pool of 4 reusable SSH connections (configurable via `workers.max_workers`)
+   - Pool of reusable SSH connections (configurable via `remote.ssh_pool_size`, 1-16, default 4)
    - Eliminates ~200ms overhead per file from spawning SSH processes
    - Workers get/put connections for FFprobe execution
 
@@ -308,26 +308,35 @@ flowchart TD
     C --> D[Stage 1: Download]
     D --> E[Download file via SFTP<br/>calculate checksum during transfer]
 
-    E --> F[Stage 2: Transcode]
-    F --> G[Run FFmpeg<br/>HEVC encoding with progress]
+    E --> F[Stage 2: Pre-check]
+    F --> G{Estimate output size}
+    G -->|Savings below threshold| H[Skip job<br/>mark as skipped]
+    G -->|OK| I[Stage 3: Transcode]
 
-    G --> H[Stage 3: Validate]
-    H --> I[Verify output with ffprobe]
-    I --> J[Calculate output checksum]
+    I --> J[Run FFmpeg<br/>HEVC encoding with progress]
 
-    J --> K[Stage 4: Upload]
-    K --> L[Upload to .transcoded temp file<br/>verify checksum matches]
+    J --> K{Output larger<br/>than input?}
+    K -->|Yes, allow_larger=false| H
+    K -->|No or allowed| L[Stage 4: Validate]
 
-    L --> M{Checksums match?}
-    M -->|No| N[Fail job]
+    L --> M[Verify output with ffprobe]
+    M --> N[Calculate output checksum]
 
-    M -->|Yes| O[Delete original file]
-    O --> P[Rename temp to original]
+    N --> O[Stage 5: Upload]
+    O --> P[Upload to .transcoded temp file<br/>verify checksum matches]
 
-    P --> Q[Mark job completed]
-    Q --> R[Clean up work directory]
+    P --> Q{Checksums match?}
+    Q -->|No| R[Fail job]
 
-    N --> S[Clean up & retry later]
+    Q -->|Yes| S[Delete original file<br/>unless keep_original=true]
+    S --> T[Rename temp to original]
+
+    T --> U[Mark job completed]
+    U --> V[Clean up work directory]
+
+    R --> W{Retry count < 3?}
+    W -->|Yes| X[Increment retry<br/>requeue job]
+    W -->|No| Y[Mark permanently failed]
 ```
 
 ---
@@ -362,7 +371,7 @@ Active and completed transcoding jobs.
 |--------|------|-------------|
 | id | INTEGER | Primary key |
 | media_file_id | INTEGER | FK to media_files |
-| status | TEXT | queued/downloading/transcoding/uploading/completed/failed/paused/canceled |
+| status | TEXT | queued/downloading/transcoding/uploading/completed/failed/paused/canceled/skipped |
 | stage | TEXT | download/transcode/validate/upload |
 | progress | REAL | 0-100 percentage |
 | worker_id | TEXT | Assigned worker |
@@ -392,8 +401,13 @@ remote:
   host: "media-server"
   port: 22
   user: "user"
+  ssh_key: "~/.ssh/id_rsa"
   media_paths:
     - "/path/to/media"
+  ssh_pool_size: 4          # SSH connections for scanning (1-16)
+  ssh_timeout: 30           # Connection timeout in seconds
+  ssh_keepalive: 0          # Keepalive interval (0 = disabled)
+  sftp_buffer_size: 32768   # SFTP buffer size in bytes (up to 1MB)
 
 database:
   path: "~/transcoder/transcoder.db"
@@ -401,16 +415,34 @@ database:
 workers:
   max_workers: 2
   work_dir: "~/transcoder_temp"
+  skip_checksum: false      # Skip verification for speed
 
 encoder:
   codec: "hevc_videotoolbox"
-  quality: 75
-  preset: "medium"
+  quality: 75               # 0-100, higher is better
+  preset: "medium"          # ultrafast to veryslow
+  min_expected_savings: 10  # Skip if less than 10% savings expected
+  allow_larger: false       # Skip if output would be larger
+
+files:
+  extensions:               # File types to process
+    - mkv
+    - mp4
+    - avi
+  min_size: 0               # Minimum file size in bytes
+  exclude_patterns: []      # Glob patterns to exclude
+  follow_symlinks: false
+  keep_original: false      # Keep source after transcoding
+
+scanner:
+  auto_scan_hours: 0        # Periodic scan interval (0 = disabled)
+  auto_queue: false         # Auto-queue jobs after scan
 
 logging:
-  level: "info"                           # debug, info, warn, error
-  file: "~/transcoder/transcoder.log"     # Application log
-  scanner_log: "~/transcoder/scanner.log" # Scanner debug log
+  level: "info"             # debug, info, warn, error
+  file: "~/transcoder/transcoder.log"
+  scanner_log: "~/transcoder/scanner.log"
+  max_size: 104857600       # Log rotation size (100MB)
 ```
 
 ---
@@ -485,6 +517,34 @@ logging:
 - **Download/Upload**: Byte-based progress (bytes transferred / total bytes)
 - **Transcoding**: Time-based progress using `out_time_us` from ffmpeg (more reliable than frame count)
 
+### Automatic Scanning
+- Periodic scans at configurable intervals (`scanner.auto_scan_hours`)
+- Optional auto-queue after scan completes (`scanner.auto_queue`)
+- Runs in background without blocking TUI
+
+### Retry Logic
+- Failed jobs automatically retry up to 3 times
+- Retry count tracked in database
+- After 3 failures, job marked as permanently failed
+- Prevents infinite retry loops on persistent errors
+
+### Early Size Detection
+- Pre-transcode estimation predicts output size
+- Jobs skipped if estimated savings below `encoder.min_expected_savings` threshold
+- Post-transcode check skips upload if output larger than input (unless `encoder.allow_larger`)
+- Skipped jobs marked with `skipped` status
+
+### Job Search & Filtering
+- Full-text search across all jobs by filename
+- Filter by content type (Movies/TV based on path)
+- Bulk actions (pause/cancel) from search results
+- No limit on displayed queue items
+
+### Log Rotation
+- Configurable max log size (`logging.max_size`)
+- Automatic rotation when size exceeded
+- Prevents unbounded log growth
+
 ---
 
 ## Performance Optimizations
@@ -492,14 +552,15 @@ logging:
 ### Scanner Optimizations (5-10x speedup)
 
 1. **Parallel FFprobe Execution**
-   - Worker pool pattern with 4+ concurrent goroutines
+   - Worker pool pattern with concurrent goroutines
    - Files processed in parallel vs serial execution
-   - Configurable via `workers.max_workers`
+   - Configurable via `remote.ssh_pool_size` (1-16, default 4)
 
 2. **SSH Connection Pooling**
-   - Pool of reusable SSH connections (sized to match worker count)
+   - Pool of reusable SSH connections (configurable pool size)
    - Eliminates ~200ms overhead per file from spawning SSH processes
    - Workers get/put connections for parallel operations
+   - Configurable timeout and keepalive settings
 
 3. **Batch Database Operations**
    - Results processor batches inserts/updates (20 files per transaction)
@@ -538,6 +599,9 @@ logging:
 ### Transcoding Optimizations
 
 1. **Size-based change detection** - No need to read file contents
-2. **Streaming checksum calculation** - Zero overhead during transfers
+2. **Streaming checksum calculation** - Zero overhead during transfers (skippable via `workers.skip_checksum`)
 3. **No redundant verification** - Upload checksum verified during transfer, no re-read after
 4. **Stage skipping** - Resume from where jobs left off (skip completed stages)
+5. **Pre-transcode estimation** - Skip jobs unlikely to achieve minimum savings threshold
+6. **Early termination** - Stop transcoding if output exceeds input size (configurable)
+7. **SFTP buffer optimization** - Tunable buffer sizes up to 1MB (`remote.sftp_buffer_size`)
