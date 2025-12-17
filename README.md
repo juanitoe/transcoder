@@ -1,5 +1,7 @@
 # Video Transcoder TUI
 
+[![CI](https://github.com/juanitoe/transcoder/actions/workflows/ci.yml/badge.svg)](https://github.com/juanitoe/transcoder/actions/workflows/ci.yml)
+
 A production-ready video transcoding system with an interactive Terminal UI for managing H.264 → HEVC conversions using Apple's VideoToolbox hardware acceleration.
 
 <!-- Add screenshot here -->
