@@ -52,6 +52,4 @@ jobs:
           go version
           go build -o transcoder-darwin-arm64 ./cmd/transcoder
       - name: Verify binary
-        run: |
-          file transcoder-darwin-arm64
-          ./transcoder-darwin-arm64 --version 2>/dev/null || echo "Built successfully"
+        run: file transcoder-darwin-arm64
