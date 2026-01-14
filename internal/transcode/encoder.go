@@ -162,8 +162,11 @@ func (e *Encoder) buildFFmpegArgs(inputPath, outputPath string) []string {
 	// Copy subtitle streams
 	args = append(args, "-c:s", "copy")
 
-	// Map all streams
-	args = append(args, "-map", "0")
+	// Map streams explicitly to avoid attached pictures (cover art)
+	// which can't be transcoded to HEVC in MP4 containers
+	args = append(args, "-map", "0:v:0") // First video stream only
+	args = append(args, "-map", "0:a?")  // All audio streams (if any)
+	args = append(args, "-map", "0:s?")  // All subtitle streams (if any)
 
 	// Output file
 	args = append(args, outputPath)
