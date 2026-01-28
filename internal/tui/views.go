@@ -11,7 +11,7 @@ import (
 
 // renderHeader renders the top header bar
 func (m Model) renderHeader() string {
-	title := "📹 Video Transcoder TUI"
+	title := "▶ Video Transcoder TUI"
 
 	// View tabs
 	tabs := []string{
@@ -96,7 +96,7 @@ func (m Model) renderDashboard() string {
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Dim gray for labels
 
 	statsContent := fmt.Sprintf(
-		"📊 Library Statistics\n\n"+
+		"▤ Library Statistics\n\n"+
 			"%s %d     %s %d     %s %d     %s %d     %s %d\n"+
 			"%s %s     %s %s (%.1f%%)     %s %.1f%%",
 		labelStyle.Render("Total Files:"),
@@ -139,7 +139,7 @@ func (m Model) renderDashboard() string {
 		Render(workerContent)
 
 	// Active Jobs - Full width
-	activeJobsStr := "🎬 Active Jobs\n\n"
+	activeJobsStr := "► Active Jobs\n\n"
 	if len(m.activeJobs) == 0 {
 		activeJobsStr += statusStyle.Render("No active jobs")
 	} else {
@@ -234,9 +234,9 @@ func (m Model) renderJobs() string {
 
 	panelSwitcher := lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		activeTabStyle.Render(" 🎬 Active Jobs "),
+		activeTabStyle.Render(" ► Active Jobs "),
 		"  ",
-		queuedTabStyle.Render(" 📋 Queued Jobs "),
+		queuedTabStyle.Render(" ☰ Queued Jobs "),
 		"  ",
 		statusStyle.Render(filterIndicator),
 	)
@@ -399,7 +399,7 @@ func (m Model) renderSearchView() string {
 	boxWidth := m.width - 4
 
 	// Search header
-	header := headerStyle.Render("🔍 Search Jobs")
+	header := headerStyle.Render("⌕ Search Jobs")
 
 	// Search input
 	inputStyle := lipgloss.NewStyle().
@@ -988,7 +988,7 @@ func (m Model) renderJobActionsDropdown(job *types.TranscodeJob) string {
 
 // renderScanner renders the scanner view
 func (m Model) renderScanner() string {
-	content := "🔍 Library Scanner\n\n"
+	content := "⌕ Library Scanner\n\n"
 
 	if m.scanning {
 		content += successStyle.Render("Scanning in progress...\n\n")
@@ -1080,7 +1080,7 @@ func (m Model) renderHelp() string {
 
 // renderLogs renders the logs view with scrolling (newest first)
 func (m Model) renderLogs() string {
-	title := "📝 Application Logs\n\n"
+	title := "≡ Application Logs\n\n"
 
 	// Ensure we have valid dimensions
 	width := m.width
