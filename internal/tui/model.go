@@ -1778,6 +1778,46 @@ func (m *Model) revertSettingValue(index int) {
 	}
 }
 
+// getSettingsNavigationOrder returns the visual order of setting indices based on current mode
+func (m *Model) getSettingsNavigationOrder() []int {
+	if m.cfg.Mode == config.ModeLocal {
+		// Local mode: Mode, Local Paths, Codec, Quality, Preset, Workers, WorkDir, DB, LogLevel, KeepOrig, SkipChecksum
+		return []int{13, 14, 15, 5, 6, 7, 8, 9, 10, 11, 12}
+	}
+	// Remote mode: Mode, Host, User, Port, SSHKey, SSHPoolSize, Codec, Quality, Preset, Workers, WorkDir, DB, LogLevel, KeepOrig, SkipChecksum
+	return []int{13, 0, 1, 2, 3, 4, 15, 5, 6, 7, 8, 9, 10, 11, 12}
+}
+
+// getNextSettingIndex returns the next setting index in visual order
+func (m *Model) getNextSettingIndex() int {
+	order := m.getSettingsNavigationOrder()
+	for i, idx := range order {
+		if idx == m.selectedSetting {
+			if i < len(order)-1 {
+				return order[i+1]
+			}
+			return m.selectedSetting // Already at last
+		}
+	}
+	// Current selection not in order (shouldn't happen), return first
+	return order[0]
+}
+
+// getPrevSettingIndex returns the previous setting index in visual order
+func (m *Model) getPrevSettingIndex() int {
+	order := m.getSettingsNavigationOrder()
+	for i, idx := range order {
+		if idx == m.selectedSetting {
+			if i > 0 {
+				return order[i-1]
+			}
+			return m.selectedSetting // Already at first
+		}
+	}
+	// Current selection not in order (shouldn't happen), return first
+	return order[0]
+}
+
 // handleSettingsKeys handles keys in settings view
 func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle save/discard prompt navigation
@@ -1937,6 +1977,8 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showModeDropdown = false
 			m.isEditingSettings = false
 			m.configModified = true
+			// Keep selection on Mode (always visible) to avoid stranded selection
+			m.selectedSetting = 13
 			m.statusMsg = fmt.Sprintf("Mode set to: %s", modes[m.modeDropdownIndex])
 			return m, nil
 		case "esc":
@@ -2087,14 +2129,10 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Not editing - handle navigation and other keys
 	switch msg.String() {
 	case "up", "k":
-		if m.selectedSetting > 0 {
-			m.selectedSetting--
-		}
+		m.selectedSetting = m.getPrevSettingIndex()
 
 	case "down", "j":
-		if m.selectedSetting < 15 { // 16 editable settings (0-15)
-			m.selectedSetting++
-		}
+		m.selectedSetting = m.getNextSettingIndex()
 
 	case "+", "=":
 		// Increase max workers
