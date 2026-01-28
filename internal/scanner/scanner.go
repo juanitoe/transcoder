@@ -203,8 +203,24 @@ func createSSHClient(cfg *config.Config) (*ssh.Client, error) {
 	return sshClient, nil
 }
 
-// Connect establishes SSH/SFTP connection to remote server
+// Connect establishes connection to remote server (or validates local paths in local mode)
 func (s *Scanner) Connect(ctx context.Context) error {
+	// In local mode, just validate that paths exist
+	if s.cfg.IsLocalMode() {
+		s.logDebug("Operating in local mode - validating media paths")
+		for _, path := range s.cfg.GetMediaPaths() {
+			expandedPath := expandPath(path)
+			if _, err := os.Stat(expandedPath); os.IsNotExist(err) {
+				return fmt.Errorf("local media path does not exist: %s", expandedPath)
+			}
+			s.logDebug("Validated local path: %s", expandedPath)
+		}
+		s.checksumAlgo = checksum.AlgoXXH64 // Use xxhash for local files
+		s.logDebug("Local mode initialized")
+		return nil
+	}
+
+	// Remote mode: establish SSH/SFTP connection
 	s.logDebug("Connecting to SSH server: %s@%s:%d", s.cfg.Remote.User, s.cfg.Remote.Host, s.cfg.Remote.Port)
 
 	// Create main SSH client
@@ -357,7 +373,8 @@ func (pt *progressThrottler) shouldUpdate(filesScanned int, force bool) bool {
 
 // Scan scans all configured media paths and updates the database
 func (s *Scanner) Scan(ctx context.Context, progressCb ProgressCallback) error {
-	if s.sftpClient == nil {
+	// In remote mode, check SFTP connection
+	if !s.cfg.IsLocalMode() && s.sftpClient == nil {
 		return fmt.Errorf("not connected - call Connect() first")
 	}
 
@@ -365,21 +382,31 @@ func (s *Scanner) Scan(ctx context.Context, progressCb ProgressCallback) error {
 	throttler := newProgressThrottler()
 	scanStartTime := time.Now()
 
+	mediaPaths := s.cfg.GetMediaPaths()
+
 	// Pre-scan: count total files for progress percentage
 	s.logDebug("Pre-scanning to count files...")
-	for _, mediaPath := range s.cfg.Remote.MediaPaths {
-		fileCount, byteCount := s.countFilesInPath(ctx, mediaPath)
+	for _, mediaPath := range mediaPaths {
+		path := mediaPath
+		if s.cfg.IsLocalMode() {
+			path = expandPath(mediaPath)
+		}
+		fileCount, byteCount := s.countFilesInPath(ctx, path)
 		totalProgress.TotalFiles += fileCount
 		totalProgress.TotalBytes += byteCount
 	}
 	s.logDebug("Found %d files (%s total)", totalProgress.TotalFiles, formatBytes(totalProgress.TotalBytes))
 
-	s.logDebug("Starting scan of %d media paths", len(s.cfg.Remote.MediaPaths))
-	for _, mediaPath := range s.cfg.Remote.MediaPaths {
-		s.logDebug("Scanning path: %s", mediaPath)
-		err := s.scanPath(ctx, mediaPath, &totalProgress, progressCb, throttler, scanStartTime)
+	s.logDebug("Starting scan of %d media paths", len(mediaPaths))
+	for _, mediaPath := range mediaPaths {
+		path := mediaPath
+		if s.cfg.IsLocalMode() {
+			path = expandPath(mediaPath)
+		}
+		s.logDebug("Scanning path: %s", path)
+		err := s.scanPath(ctx, path, &totalProgress, progressCb, throttler, scanStartTime)
 		if err != nil {
-			return fmt.Errorf("failed to scan %s: %w", mediaPath, err)
+			return fmt.Errorf("failed to scan %s: %w", path, err)
 		}
 	}
 
@@ -594,8 +621,29 @@ func (s *Scanner) walkAndEnqueue(ctx context.Context, path string, workCh chan<-
 	s.progress = *progress
 	s.progressMu.Unlock()
 
-	// List directory contents
-	entries, err := s.sftpClient.ReadDir(path)
+	// List directory contents - use local or remote depending on mode
+	var entries []os.FileInfo
+	var err error
+
+	if s.cfg.IsLocalMode() {
+		// Local mode: use os.ReadDir
+		dirEntries, readErr := os.ReadDir(path)
+		if readErr != nil {
+			err = readErr
+		} else {
+			entries = make([]os.FileInfo, 0, len(dirEntries))
+			for _, de := range dirEntries {
+				info, infoErr := de.Info()
+				if infoErr == nil {
+					entries = append(entries, info)
+				}
+			}
+		}
+	} else {
+		// Remote mode: use SFTP
+		entries, err = s.sftpClient.ReadDir(path)
+	}
+
 	if err != nil {
 		s.progressMu.Lock()
 		progress.ErrorCount++
@@ -682,7 +730,29 @@ func (s *Scanner) countFilesInPath(ctx context.Context, path string) (int, int64
 	var fileCount int
 	var byteCount int64
 
-	entries, err := s.sftpClient.ReadDir(path)
+	// List directory contents - use local or remote depending on mode
+	var entries []os.FileInfo
+	var err error
+
+	if s.cfg.IsLocalMode() {
+		// Local mode: use os.ReadDir
+		dirEntries, readErr := os.ReadDir(path)
+		if readErr != nil {
+			err = readErr
+		} else {
+			entries = make([]os.FileInfo, 0, len(dirEntries))
+			for _, de := range dirEntries {
+				info, infoErr := de.Info()
+				if infoErr == nil {
+					entries = append(entries, info)
+				}
+			}
+		}
+	} else {
+		// Remote mode: use SFTP
+		entries, err = s.sftpClient.ReadDir(path)
+	}
+
 	if err != nil {
 		return 0, 0 // Skip directories we can't read
 	}
@@ -806,10 +876,14 @@ func (s *Scanner) shouldProcessFile(filePath string, fileSize int64) bool {
 	return true
 }
 
-// extractMetadata extracts video metadata from a remote file using ffprobe
-func (s *Scanner) extractMetadata(ctx context.Context, remotePath string) (*types.MediaFile, error) {
-	// Use FFprobe to extract full metadata
-	return s.ExtractMetadataWithFFprobe(ctx, remotePath)
+// extractMetadata extracts video metadata from a file using ffprobe
+func (s *Scanner) extractMetadata(ctx context.Context, filePath string) (*types.MediaFile, error) {
+	if s.cfg.IsLocalMode() {
+		// Use local ffprobe
+		return s.ExtractMetadataWithLocalFFprobe(ctx, filePath)
+	}
+	// Use remote FFprobe via SSH
+	return s.ExtractMetadataWithFFprobe(ctx, filePath)
 }
 
 // DownloadFile downloads a remote file to a local path with progress tracking
@@ -1068,4 +1142,18 @@ func formatBytes(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
+}
+
+// expandPath expands ~ to home directory
+func expandPath(path string) string {
+	if len(path) > 0 && path[0] == '~' {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			if len(path) == 1 {
+				return home
+			}
+			return filepath.Join(home, path[1:])
+		}
+	}
+	return path
 }

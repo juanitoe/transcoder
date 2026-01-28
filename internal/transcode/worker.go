@@ -3,6 +3,7 @@ package transcode
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -208,21 +209,26 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
 
-	// Create a dedicated scanner with its own SSH connection for this job
-	jobScanner, err := scanner.New(w.cfg, w.db)
-	if err != nil {
-		logging.Error("[%s] Job %d failed: Failed to create scanner: %v", workerID, job.ID, err)
-		_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to create scanner: %v", err))
-		return
-	}
+	// In local mode, we don't need SSH/SFTP connections
+	var jobScanner *scanner.Scanner
+	if !w.cfg.IsLocalMode() {
+		// Create a dedicated scanner with its own SSH connection for this job
+		var err error
+		jobScanner, err = scanner.New(w.cfg, w.db)
+		if err != nil {
+			logging.Error("[%s] Job %d failed: Failed to create scanner: %v", workerID, job.ID, err)
+			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to create scanner: %v", err))
+			return
+		}
 
-	// Establish SSH/SFTP connection
-	if err := jobScanner.Connect(jobCtx); err != nil {
-		logging.Error("[%s] Job %d failed: Failed to connect to remote server: %v", workerID, job.ID, err)
-		_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to connect to remote server: %v", err))
-		return
+		// Establish SSH/SFTP connection
+		if err := jobScanner.Connect(jobCtx); err != nil {
+			logging.Error("[%s] Job %d failed: Failed to connect to remote server: %v", workerID, job.ID, err)
+			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to connect to remote server: %v", err))
+			return
+		}
+		defer func() { _ = jobScanner.Close() }()
 	}
-	defer func() { _ = jobScanner.Close() }()
 
 	// Monitor for pause/cancel requests
 	go func() {
@@ -272,14 +278,32 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		}
 	}()
 
-	localInputPath := filepath.Join(workDir, job.FileName)
-	localOutputPath := filepath.Join(workDir, "transcoded_"+job.FileName)
+	// In local mode, input path is the original file; in remote mode, download to work dir
+	var localInputPath string
+	var localOutputPath string
+
+	if w.cfg.IsLocalMode() {
+		// Local mode: input is the original file, output goes to work dir
+		localInputPath = job.FilePath
+		localOutputPath = filepath.Join(workDir, "transcoded_"+job.FileName)
+	} else {
+		// Remote mode: download to work dir
+		localInputPath = filepath.Join(workDir, job.FileName)
+		localOutputPath = filepath.Join(workDir, "transcoded_"+job.FileName)
+	}
 
 	// Track checksums
 	var localInputChecksum string
 
-	// Stage 1: Download (skip if file already exists - recovered job)
-	if _, err := os.Stat(localInputPath); os.IsNotExist(err) {
+	// Stage 1: Download (skip in local mode, or if file already exists - recovered job)
+	if w.cfg.IsLocalMode() {
+		// Local mode: no download needed, just calculate checksum
+		w.updateProgress(job.ID, types.StageDownload, 100, "Local mode - no download needed", job.FileSizeBytes, job.FileSizeBytes)
+		result, err := checksum.CalculateFile(localInputPath)
+		if err == nil {
+			localInputChecksum = result.Hash
+		}
+	} else if _, err := os.Stat(localInputPath); os.IsNotExist(err) {
 		_ = w.db.UpdateJobStatus(job.ID, types.StatusDownloading, types.StageDownload, 0)
 		w.updateProgress(job.ID, types.StageDownload, 0, "Downloading", 0, job.FileSizeBytes)
 		localInputChecksum, err = jobScanner.DownloadFileWithChecksum(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
@@ -508,90 +532,106 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		return
 	}
 
-	// Stage 4: Upload
-	_ = w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
-	w.updateProgress(job.ID, types.StageUpload, 0, "Uploading", 0, transcodedInfo.Size)
+	// Stage 4: Upload / Replace file
+	var uploadedChecksum string
 
-	// Upload to temporary location first
-	remoteTempPath := job.FilePath + ".transcoded"
-	uploadedChecksum, err := jobScanner.UploadFileWithChecksum(jobCtx, localOutputPath, remoteTempPath, func(bytesWritten, totalBytes int64) {
-		progress := (float64(bytesWritten) / float64(totalBytes)) * 100
-		w.updateProgress(job.ID, types.StageUpload, progress, fmt.Sprintf("Uploading: %.1f%%", progress), bytesWritten, totalBytes)
-	})
+	if w.cfg.IsLocalMode() {
+		// Local mode: replace file directly without upload
+		_ = w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
+		w.updateProgress(job.ID, types.StageUpload, 0, "Replacing original file", 0, transcodedInfo.Size)
 
-	if err != nil {
-		logging.Error("[%s] Job %d failed: Upload failed: %v", workerID, job.ID, err)
-		_ = w.db.FailJob(job.ID, fmt.Sprintf("Upload failed: %v", err))
-		return
-	}
+		// Replace original file with transcoded file
+		if err := w.replaceLocalFile(job.FilePath, localOutputPath, w.cfg.Files.KeepOriginal); err != nil {
+			logging.Error("[%s] Job %d failed: Failed to replace original file: %v", workerID, job.ID, err)
+			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to replace original file: %v", err))
+			_ = os.Remove(localOutputPath) // Clean up transcoded file
+			return
+		}
 
-	// Verify upload checksum matches local output checksum
-	if uploadedChecksum != localOutputChecksum {
-		if w.cfg.Workers.SkipChecksumVerification {
-			// Log warning but continue (skip verification)
-			logging.Warn("[%s] Job %d: Upload checksum mismatch (verification skipped): expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
-		} else {
-			// Fail job on checksum mismatch
-			logging.Error("[%s] Job %d failed: Upload checksum mismatch: expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum))
+		// In local mode, the "uploaded" checksum is the same as output checksum
+		uploadedChecksum = localOutputChecksum
+		w.updateProgress(job.ID, types.StageUpload, 100, "File replaced successfully", transcodedInfo.Size, transcodedInfo.Size)
+	} else {
+		// Remote mode: upload via SFTP
+		_ = w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
+		w.updateProgress(job.ID, types.StageUpload, 0, "Uploading", 0, transcodedInfo.Size)
+
+		// Upload to temporary location first
+		remoteTempPath := job.FilePath + ".transcoded"
+		uploadedChecksum, err = jobScanner.UploadFileWithChecksum(jobCtx, localOutputPath, remoteTempPath, func(bytesWritten, totalBytes int64) {
+			progress := (float64(bytesWritten) / float64(totalBytes)) * 100
+			w.updateProgress(job.ID, types.StageUpload, progress, fmt.Sprintf("Uploading: %.1f%%", progress), bytesWritten, totalBytes)
+		})
+
+		if err != nil {
+			logging.Error("[%s] Job %d failed: Upload failed: %v", workerID, job.ID, err)
+			_ = w.db.FailJob(job.ID, fmt.Sprintf("Upload failed: %v", err))
+			return
+		}
+
+		// Verify upload checksum matches local output checksum
+		if uploadedChecksum != localOutputChecksum {
+			if w.cfg.Workers.SkipChecksumVerification {
+				// Log warning but continue (skip verification)
+				logging.Warn("[%s] Job %d: Upload checksum mismatch (verification skipped): expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
+			} else {
+				// Fail job on checksum mismatch
+				logging.Error("[%s] Job %d failed: Upload checksum mismatch: expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
+				_ = w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum))
+				_ = jobScanner.DeleteRemoteFile(remoteTempPath)
+				return
+			}
+		}
+
+		// Check if cancelled
+		select {
+		case <-jobCtx.Done():
+			// Remove temp file if cancelled after upload
 			_ = jobScanner.DeleteRemoteFile(remoteTempPath)
 			return
+		default:
+		}
+
+		// Replace original file with transcoded file atomically
+		if w.cfg.Files.KeepOriginal {
+			// Keep original file by renaming it to .original
+			originalBackupPath := job.FilePath + ".original"
+			if err := jobScanner.RenameRemoteFile(job.FilePath, originalBackupPath); err != nil {
+				logging.Error("[%s] Job %d failed: Failed to backup original file: %v", workerID, job.ID, err)
+				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to backup original file: %v", err))
+				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+				return
+			}
+
+			// Rename transcoded file to original name (atomic operation)
+			if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
+				logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
+				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
+				// Try to restore original from backup
+				_ = jobScanner.RenameRemoteFile(originalBackupPath, job.FilePath)
+				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+				return
+			}
+
+			logging.Info("[%s] Job %d: Original file kept as backup: %s", workerID, job.ID, originalBackupPath)
+		} else {
+			// Delete original file and replace with transcoded
+			if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
+				logging.Error("[%s] Job %d failed: Failed to delete original file: %v", workerID, job.ID, err)
+				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
+				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+				return
+			}
+
+			// Rename transcoded file to original name (atomic operation)
+			if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
+				logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
+				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
+				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
+				return
+			}
 		}
 	}
-
-	// Check if cancelled
-	select {
-	case <-jobCtx.Done():
-		// Remove temp file if cancelled after upload
-		_ = jobScanner.DeleteRemoteFile(remoteTempPath)
-		return
-	default:
-	}
-
-	// Replace original file with transcoded file atomically
-	if w.cfg.Files.KeepOriginal {
-		// Keep original file by renaming it to .original
-		originalBackupPath := job.FilePath + ".original"
-		if err := jobScanner.RenameRemoteFile(job.FilePath, originalBackupPath); err != nil {
-			logging.Error("[%s] Job %d failed: Failed to backup original file: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to backup original file: %v", err))
-			_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
-			return
-		}
-
-		// Rename transcoded file to original name (atomic operation)
-		if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
-			logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
-			// Try to restore original from backup
-			_ = jobScanner.RenameRemoteFile(originalBackupPath, job.FilePath)
-			_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
-			return
-		}
-
-		logging.Info("[%s] Job %d: Original file kept as backup: %s", workerID, job.ID, originalBackupPath)
-	} else {
-		// Delete original file and replace with transcoded
-		if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
-			logging.Error("[%s] Job %d failed: Failed to delete original file: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
-			_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
-			return
-		}
-
-		// Rename transcoded file to original name (atomic operation)
-		if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
-			logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
-			_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
-			return
-		}
-	}
-
-	// Note: We skip final remote checksum verification because:
-	// 1. Upload already verified checksum during transfer (streaming)
-	// 2. Re-reading entire file is slow (especially for large files)
-	// 3. The uploadedChecksum == localOutputChecksum check above is sufficient
 
 	// Calculate encoding time and stats
 	encodingTime := int(time.Since(startTime).Seconds())
@@ -647,4 +687,65 @@ func expandPath(path string) string {
 		}
 	}
 	return path
+}
+
+// replaceLocalFile replaces the original file with the transcoded file
+func (w *Worker) replaceLocalFile(originalPath, transcodedPath string, keepOriginal bool) error {
+	if keepOriginal {
+		// Rename original to .original backup
+		backupPath := originalPath + ".original"
+		if err := os.Rename(originalPath, backupPath); err != nil {
+			return fmt.Errorf("failed to backup original file: %w", err)
+		}
+		logging.Info("Original file backed up to: %s", backupPath)
+	} else {
+		// Delete original file
+		if err := os.Remove(originalPath); err != nil {
+			return fmt.Errorf("failed to delete original file: %w", err)
+		}
+	}
+
+	// Move transcoded file to original location
+	if err := os.Rename(transcodedPath, originalPath); err != nil {
+		// If rename fails (e.g., cross-device), try copy + delete
+		if copyErr := copyFile(transcodedPath, originalPath); copyErr != nil {
+			return fmt.Errorf("failed to move transcoded file: %w (copy also failed: %v)", err, copyErr)
+		}
+		_ = os.Remove(transcodedPath)
+	}
+
+	return nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sourceFile.Close() }()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = destFile.Close() }()
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := sourceFile.Read(buf)
+		if n > 0 {
+			if _, writeErr := destFile.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return readErr
+		}
+	}
+
+	return destFile.Sync()
 }

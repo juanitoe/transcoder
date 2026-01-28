@@ -1,6 +1,13 @@
 package version
 
-import "time"
+import "fmt"
+
+// Version information
+const (
+	Major = 1
+	Minor = 1
+	Patch = 0
+)
 
 // Build information - set via ldflags at build time
 var (
@@ -8,14 +15,19 @@ var (
 	GitCommit = "" // Set via: -ldflags "-X transcoder/internal/version.GitCommit=$(git rev-parse --short HEAD)"
 )
 
-// GetVersion returns the version string (build time or git commit)
+// String returns the semantic version string
+func String() string {
+	return fmt.Sprintf("%d.%d.%d", Major, Minor, Patch)
+}
+
+// GetVersion returns the full version string with build info
 func GetVersion() string {
-	if BuildTime != "" {
-		return BuildTime
-	}
+	ver := String()
 	if GitCommit != "" {
-		return GitCommit
+		ver += "-" + GitCommit
 	}
-	// Fallback for development builds without ldflags
-	return time.Now().Format("20060102.150405")
+	if BuildTime != "" {
+		ver += " (" + BuildTime + ")"
+	}
+	return ver
 }

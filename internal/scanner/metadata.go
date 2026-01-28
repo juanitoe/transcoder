@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -42,7 +43,7 @@ type FFprobeStream struct {
 	Channels      int               `json:"channels"`
 }
 
-// ExtractMetadataWithFFprobe extracts full metadata from a video file using ffprobe
+// ExtractMetadataWithFFprobe extracts full metadata from a remote video file using ffprobe via SSH
 func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath string) (*types.MediaFile, error) {
 	// Get an SSH client from the pool
 	sshClient := s.sshPool.get()
@@ -70,6 +71,33 @@ func (s *Scanner) ExtractMetadataWithFFprobe(ctx context.Context, filePath strin
 	}
 	s.logDebug("ffprobe succeeded, output length: %d bytes", len(output))
 
+	return s.parseFFprobeOutput(output, filePath)
+}
+
+// ExtractMetadataWithLocalFFprobe extracts metadata from a local video file using ffprobe
+func (s *Scanner) ExtractMetadataWithLocalFFprobe(ctx context.Context, filePath string) (*types.MediaFile, error) {
+	s.logDebug("Running local ffprobe for: %s", filePath)
+
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_format",
+		"-show_streams",
+		filePath,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		s.logDebug("ffprobe command failed: %v", err)
+		return nil, fmt.Errorf("ffprobe failed: %w", err)
+	}
+	s.logDebug("ffprobe succeeded, output length: %d bytes", len(output))
+
+	return s.parseFFprobeOutput(output, filePath)
+}
+
+// parseFFprobeOutput parses ffprobe JSON output into a MediaFile
+func (s *Scanner) parseFFprobeOutput(output []byte, filePath string) (*types.MediaFile, error) {
 	// Parse JSON output
 	var probe FFprobeOutput
 	if err := json.Unmarshal(output, &probe); err != nil {

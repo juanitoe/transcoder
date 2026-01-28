@@ -135,24 +135,41 @@ func (e *Encoder) Transcode(ctx context.Context, inputPath, outputPath string, d
 func (e *Encoder) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args := []string{
 		"-y", // Overwrite output file
-		"-i", inputPath,
-		"-c:v", e.cfg.Encoder.Codec, // Video codec (hevc_videotoolbox)
-		"-progress", "pipe:2", // Send progress to stderr
-		"-stats_period", "0.5", // Update stats every 0.5 seconds
 	}
 
-	// Quality settings
-	// For videotoolbox, use -q:v (0-100, where 100 is best quality)
-	if strings.Contains(e.cfg.Encoder.Codec, "videotoolbox") {
+	// Add VAAPI device before input if using VAAPI codec
+	if strings.Contains(e.cfg.Encoder.Codec, "vaapi") {
+		args = append(args, "-vaapi_device", e.cfg.Encoder.VaapiDevice)
+	}
+
+	args = append(args,
+		"-i", inputPath,
+		"-c:v", e.cfg.Encoder.Codec, // Video codec (hevc_videotoolbox, hevc_vaapi, etc.)
+		"-progress", "pipe:2", // Send progress to stderr
+		"-stats_period", "0.5", // Update stats every 0.5 seconds
+	)
+
+	// Quality settings - different encoders use different parameters
+	switch {
+	case strings.Contains(e.cfg.Encoder.Codec, "videotoolbox"):
+		// VideoToolbox uses -q:v (0-100, where 100 is best quality)
 		args = append(args, "-q:v", strconv.Itoa(e.cfg.Encoder.Quality))
-	} else {
-		// For software encoders, use CRF (0-51, where 0 is lossless)
+	case strings.Contains(e.cfg.Encoder.Codec, "vaapi"):
+		// VAAPI uses -qp (0-51, inverted from our 0-100 quality scale)
+		qp := 51 - int(float64(e.cfg.Encoder.Quality)/100.0*51)
+		args = append(args, "-qp", strconv.Itoa(qp))
+		// VAAPI requires hardware upload filter
+		args = append(args, "-vf", "format=nv12,hwupload")
+	default:
+		// Software encoders use CRF (0-51, where 0 is lossless)
 		crf := 51 - int(float64(e.cfg.Encoder.Quality)/100.0*51)
 		args = append(args, "-crf", strconv.Itoa(crf))
 	}
 
-	// Preset (if applicable)
-	if e.cfg.Encoder.Preset != "" && !strings.Contains(e.cfg.Encoder.Codec, "videotoolbox") {
+	// Preset (if applicable) - skip for videotoolbox and vaapi
+	if e.cfg.Encoder.Preset != "" &&
+		!strings.Contains(e.cfg.Encoder.Codec, "videotoolbox") &&
+		!strings.Contains(e.cfg.Encoder.Codec, "vaapi") {
 		args = append(args, "-preset", e.cfg.Encoder.Preset)
 	}
 

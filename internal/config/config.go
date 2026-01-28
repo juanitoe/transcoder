@@ -8,15 +8,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// OperatingMode specifies whether to work with remote or local files
+type OperatingMode string
+
+const (
+	ModeRemote OperatingMode = "remote"
+	ModeLocal  OperatingMode = "local"
+)
+
 // Config represents the application configuration
 type Config struct {
+	Mode     OperatingMode  `yaml:"mode"` // "remote" (default) or "local"
 	Remote   RemoteConfig   `yaml:"remote"`
+	Local    LocalConfig    `yaml:"local"`
 	Encoder  EncoderConfig  `yaml:"encoder"`
 	Workers  WorkersConfig  `yaml:"workers"`
 	Files    FileConfig     `yaml:"files"`
 	Scanner  ScannerConfig  `yaml:"scanner"`
 	Database DatabaseConfig `yaml:"database"`
 	Logging  LoggingConfig  `yaml:"logging"`
+}
+
+// LocalConfig contains settings for local file processing mode
+type LocalConfig struct {
+	MediaPaths []string `yaml:"media_paths"` // Local directories to scan
 }
 
 // ScannerConfig contains scanner settings
@@ -40,11 +55,12 @@ type RemoteConfig struct {
 
 // EncoderConfig contains video encoding settings
 type EncoderConfig struct {
-	Codec              string `yaml:"codec"`                // e.g., hevc_videotoolbox
+	Codec              string `yaml:"codec"`                // e.g., hevc_videotoolbox, hevc_vaapi
 	Quality            int    `yaml:"quality"`              // 0-100
 	Preset             string `yaml:"preset"`               // ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
 	AllowLargerOutput  bool   `yaml:"allow_larger_output"`  // Allow transcoded files larger than original (default false = skip if larger)
 	MinExpectedSavings int    `yaml:"min_expected_savings"` // Minimum expected size reduction % to attempt transcode (default 10)
+	VaapiDevice        string `yaml:"vaapi_device"`         // VAAPI device path (e.g., /dev/dri/renderD128)
 }
 
 // WorkersConfig contains worker pool settings
@@ -112,6 +128,11 @@ func Load(path string) (*Config, error) {
 
 // applyDefaults sets default values for optional fields
 func (c *Config) applyDefaults() {
+	// Mode defaults to remote for backwards compatibility
+	if c.Mode == "" {
+		c.Mode = ModeRemote
+	}
+
 	// Remote defaults
 	if c.Remote.Port == 0 {
 		c.Remote.Port = 22
@@ -146,6 +167,10 @@ func (c *Config) applyDefaults() {
 
 	if c.Encoder.MinExpectedSavings == 0 {
 		c.Encoder.MinExpectedSavings = 10 // Default 10% minimum expected savings
+	}
+
+	if c.Encoder.VaapiDevice == "" {
+		c.Encoder.VaapiDevice = "/dev/dri/renderD128"
 	}
 
 	// Workers defaults
@@ -198,33 +223,46 @@ func (c *Config) applyDefaults() {
 
 // validate checks that required fields are set
 func (c *Config) validate() error {
-	// Remote validation
-	if c.Remote.Host == "" {
-		return fmt.Errorf("remote.host is required")
+	// Mode validation
+	if c.Mode != ModeRemote && c.Mode != ModeLocal {
+		return fmt.Errorf("mode must be 'remote' or 'local'")
 	}
 
-	if c.Remote.User == "" {
-		return fmt.Errorf("remote.user is required")
-	}
+	// Mode-specific validation
+	if c.Mode == ModeRemote {
+		// Remote validation
+		if c.Remote.Host == "" {
+			return fmt.Errorf("remote.host is required when mode is 'remote'")
+		}
 
-	if len(c.Remote.MediaPaths) == 0 {
-		return fmt.Errorf("remote.media_paths must have at least one path")
-	}
+		if c.Remote.User == "" {
+			return fmt.Errorf("remote.user is required when mode is 'remote'")
+		}
 
-	if c.Remote.SSHPoolSize < 1 || c.Remote.SSHPoolSize > 16 {
-		return fmt.Errorf("remote.ssh_pool_size must be between 1 and 16")
-	}
+		if len(c.Remote.MediaPaths) == 0 {
+			return fmt.Errorf("remote.media_paths must have at least one path when mode is 'remote'")
+		}
 
-	if c.Remote.SSHTimeout < 1 || c.Remote.SSHTimeout > 300 {
-		return fmt.Errorf("remote.ssh_timeout must be between 1 and 300 seconds")
-	}
+		if c.Remote.SSHPoolSize < 1 || c.Remote.SSHPoolSize > 16 {
+			return fmt.Errorf("remote.ssh_pool_size must be between 1 and 16")
+		}
 
-	if c.Remote.SSHKeepalive < 0 || c.Remote.SSHKeepalive > 3600 {
-		return fmt.Errorf("remote.ssh_keepalive must be between 0 and 3600 seconds")
-	}
+		if c.Remote.SSHTimeout < 1 || c.Remote.SSHTimeout > 300 {
+			return fmt.Errorf("remote.ssh_timeout must be between 1 and 300 seconds")
+		}
 
-	if c.Remote.SFTPBufferSize < 0 || c.Remote.SFTPBufferSize > 1048576 {
-		return fmt.Errorf("remote.sftp_buffer_size must be between 0 and 1048576 bytes (1MB)")
+		if c.Remote.SSHKeepalive < 0 || c.Remote.SSHKeepalive > 3600 {
+			return fmt.Errorf("remote.ssh_keepalive must be between 0 and 3600 seconds")
+		}
+
+		if c.Remote.SFTPBufferSize < 0 || c.Remote.SFTPBufferSize > 1048576 {
+			return fmt.Errorf("remote.sftp_buffer_size must be between 0 and 1048576 bytes (1MB)")
+		}
+	} else {
+		// Local validation
+		if len(c.Local.MediaPaths) == 0 {
+			return fmt.Errorf("local.media_paths must have at least one path when mode is 'local'")
+		}
 	}
 
 	// Encoder validation
@@ -267,6 +305,19 @@ func Default() *Config {
 	cfg := &Config{}
 	cfg.applyDefaults()
 	return cfg
+}
+
+// GetMediaPaths returns the media paths based on operating mode
+func (c *Config) GetMediaPaths() []string {
+	if c.Mode == ModeLocal {
+		return c.Local.MediaPaths
+	}
+	return c.Remote.MediaPaths
+}
+
+// IsLocalMode returns true if operating in local mode
+func (c *Config) IsLocalMode() bool {
+	return c.Mode == ModeLocal
 }
 
 // Save writes the configuration to a YAML file
