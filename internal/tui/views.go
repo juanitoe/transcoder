@@ -124,7 +124,7 @@ func (m Model) renderDashboard() string {
 
 	// Worker Status - Full width with formatted labels
 	workerContent := fmt.Sprintf(
-		"⚙️  Worker Status     •     %s %d     •     %s %d     •     %s %d     •     %s",
+		"✱  Worker Status     •     %s %d     •     %s %d     •     %s %d     •     %s",
 		labelStyle.Render("Active:"),
 		len(m.activeJobs),
 		labelStyle.Render("Max:"),
@@ -477,7 +477,7 @@ func (m Model) renderSearchView() string {
 
 // renderSettings renders the settings view
 func (m Model) renderSettings() string {
-	content := "⚙️  Settings\n\n"
+	content := "✱  Settings\n\n"
 
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
