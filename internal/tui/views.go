@@ -483,149 +483,84 @@ func (m Model) renderSettings() string {
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	editingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 
-	settingNames := []string{
-		"Host:          ",
-		"User:          ",
-		"Port:          ",
-		"SSH Key:       ",
-		"SSH Pool Size: ",
-		"Quality:       ",
-		"Preset:        ",
-		"Max Workers:   ",
-		"Work Directory:",
-		"Database Path: ",
-		"Log Level:     ",
-		"Keep Original: ",
-		"Skip Checksum: ",
-	}
-
-	// Remote Configuration
-	content += "Remote Configuration:\n"
-	for i := 0; i < 5; i++ {
+	// Helper function to render a setting field
+	renderField := func(index int, labelText, value string, isDropdown bool) string {
 		prefix := "  "
-		if i == m.selectedSetting {
-			if m.isEditingSettings && !m.showSSHPoolSizeDropdown {
+		if index == m.selectedSetting {
+			if m.isEditingSettings && !isDropdown {
 				prefix = editingStyle.Render("▶ ")
 			} else {
 				prefix = selectedStyle.Render("▶ ")
 			}
 		}
-
-		label := labelStyle.Render(settingNames[i])
-		value := m.settingsInputs[i].Value()
-		if i == m.selectedSetting && m.isEditingSettings && !m.showSSHPoolSizeDropdown {
-			value = m.settingsInputs[i].View()
+		label := labelStyle.Render(labelText)
+		displayValue := value
+		if index == m.selectedSetting && m.isEditingSettings && !isDropdown {
+			displayValue = m.settingsInputs[index].View()
 		}
-		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+		return fmt.Sprintf("%s%s %s\n", prefix, label, displayValue)
+	}
 
-		// Show dropdown after SSH Pool Size field if active
-		if i == 4 && m.showSSHPoolSizeDropdown {
+	// Operating Mode section (always visible, at top)
+	content += "Operating Mode:\n"
+	content += renderField(13, "Mode:          ", m.settingsInputs[13].Value(), m.showModeDropdown)
+	if m.showModeDropdown {
+		content += m.renderModeDropdown()
+	}
+
+	// Local Configuration (only when mode == local)
+	if m.cfg.Mode == "local" {
+		content += "\nLocal Configuration:\n"
+		content += renderField(14, "Media Paths:   ", m.settingsInputs[14].Value(), false)
+	}
+
+	// Remote Configuration (only when mode == remote)
+	if m.cfg.Mode == "remote" {
+		content += "\nRemote Configuration:\n"
+		content += renderField(0, "Host:          ", m.settingsInputs[0].Value(), false)
+		content += renderField(1, "User:          ", m.settingsInputs[1].Value(), false)
+		content += renderField(2, "Port:          ", m.settingsInputs[2].Value(), false)
+		content += renderField(3, "SSH Key:       ", m.settingsInputs[3].Value(), false)
+		content += renderField(4, "SSH Pool Size: ", m.settingsInputs[4].Value(), m.showSSHPoolSizeDropdown)
+		if m.showSSHPoolSizeDropdown {
 			content += m.renderSSHPoolSizeDropdown()
 		}
 	}
 
-	// Encoder Settings
+	// Encoder Settings (always visible)
 	content += "\nEncoder Settings:\n"
-	content += fmt.Sprintf("  %s %s (fixed)\n", labelStyle.Render("Codec:         "), m.cfg.Encoder.Codec)
-	for i := 5; i < 7; i++ {
-		prefix := "  "
-		if i == m.selectedSetting {
-			if m.isEditingSettings && !m.showPresetDropdown {
-				prefix = editingStyle.Render("▶ ")
-			} else {
-				prefix = selectedStyle.Render("▶ ")
-			}
-		}
-
-		label := labelStyle.Render(settingNames[i])
-		value := m.settingsInputs[i].Value()
-		if i == m.selectedSetting && m.isEditingSettings && !m.showPresetDropdown {
-			value = m.settingsInputs[i].View()
-		}
-		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
-
-		// Show dropdown after Preset field if active
-		if i == 6 && m.showPresetDropdown {
-			content += m.renderPresetDropdown()
-		}
+	content += renderField(15, "Codec:         ", m.settingsInputs[15].Value(), m.showCodecDropdown)
+	if m.showCodecDropdown {
+		content += m.renderCodecDropdown()
+	}
+	content += renderField(5, "Quality:       ", m.settingsInputs[5].Value(), false)
+	content += renderField(6, "Preset:        ", m.settingsInputs[6].Value(), m.showPresetDropdown)
+	if m.showPresetDropdown {
+		content += m.renderPresetDropdown()
 	}
 
 	// Worker Configuration
 	content += "\nWorker Configuration:\n"
-	for i := 7; i < 9; i++ {
-		prefix := "  "
-		if i == m.selectedSetting {
-			if m.isEditingSettings {
-				prefix = editingStyle.Render("▶ ")
-			} else {
-				prefix = selectedStyle.Render("▶ ")
-			}
-		}
-
-		label := labelStyle.Render(settingNames[i])
-		value := m.settingsInputs[i].Value()
-		if i == m.selectedSetting && m.isEditingSettings {
-			value = m.settingsInputs[i].View()
-		}
-		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
-	}
+	content += renderField(7, "Max Workers:   ", m.settingsInputs[7].Value(), false)
+	content += renderField(8, "Work Directory:", m.settingsInputs[8].Value(), false)
 
 	// Database
 	content += "\nDatabase:\n"
-	i := 9
-	prefix := "  "
-	if i == m.selectedSetting {
-		if m.isEditingSettings {
-			prefix = editingStyle.Render("▶ ")
-		} else {
-			prefix = selectedStyle.Render("▶ ")
-		}
-	}
-	label := labelStyle.Render(settingNames[i])
-	value := m.settingsInputs[i].Value()
-	if i == m.selectedSetting && m.isEditingSettings {
-		value = m.settingsInputs[i].View()
-	}
-	content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
+	content += renderField(9, "Database Path: ", m.settingsInputs[9].Value(), false)
 
 	// Application Settings
 	content += "\nApplication Settings:\n"
-	for i := 10; i < 13; i++ {
-		prefix := "  "
-		if i == m.selectedSetting {
-			// Don't show editing prefix if dropdown is open
-			dropdownOpen := (i == 10 && m.showLogLevelDropdown) ||
-				(i == 11 && m.showKeepOriginalDropdown) ||
-				(i == 12 && m.showSkipChecksumDropdown)
-			if m.isEditingSettings && !dropdownOpen {
-				prefix = editingStyle.Render("▶ ")
-			} else {
-				prefix = selectedStyle.Render("▶ ")
-			}
-		}
-
-		label := labelStyle.Render(settingNames[i])
-		value := m.settingsInputs[i].Value()
-		if i == m.selectedSetting && m.isEditingSettings {
-			dropdownOpen := (i == 10 && m.showLogLevelDropdown) ||
-				(i == 11 && m.showKeepOriginalDropdown) ||
-				(i == 12 && m.showSkipChecksumDropdown)
-			if !dropdownOpen {
-				value = m.settingsInputs[i].View()
-			}
-		}
-		content += fmt.Sprintf("%s%s %s\n", prefix, label, value)
-
-		// Show dropdown after each field if active
-		if i == 10 && m.showLogLevelDropdown {
-			content += m.renderLogLevelDropdown()
-		}
-		if i == 11 && m.showKeepOriginalDropdown {
-			content += m.renderKeepOriginalDropdown()
-		}
-		if i == 12 && m.showSkipChecksumDropdown {
-			content += m.renderSkipChecksumDropdown()
-		}
+	content += renderField(10, "Log Level:     ", m.settingsInputs[10].Value(), m.showLogLevelDropdown)
+	if m.showLogLevelDropdown {
+		content += m.renderLogLevelDropdown()
+	}
+	content += renderField(11, "Keep Original: ", m.settingsInputs[11].Value(), m.showKeepOriginalDropdown)
+	if m.showKeepOriginalDropdown {
+		content += m.renderKeepOriginalDropdown()
+	}
+	content += renderField(12, "Skip Checksum: ", m.settingsInputs[12].Value(), m.showSkipChecksumDropdown)
+	if m.showSkipChecksumDropdown {
+		content += m.renderSkipChecksumDropdown()
 	}
 
 	// Validation error
@@ -635,10 +570,12 @@ func (m Model) renderSettings() string {
 
 	// Help text
 	content += "\n\n"
+	anyDropdownOpen := m.showSSHPoolSizeDropdown || m.showPresetDropdown || m.showLogLevelDropdown ||
+		m.showKeepOriginalDropdown || m.showSkipChecksumDropdown || m.showModeDropdown || m.showCodecDropdown
 	if m.showSaveDiscardPrompt {
 		// Show save/discard prompt
 		content += m.renderSaveDiscardPrompt()
-	} else if m.showSSHPoolSizeDropdown || m.showPresetDropdown || m.showLogLevelDropdown || m.showKeepOriginalDropdown || m.showSkipChecksumDropdown {
+	} else if anyDropdownOpen {
 		// Help text is shown in the dropdown itself
 	} else if m.isEditingSettings {
 		content += helpStyle.Render("[Enter] Save • [Esc] Cancel")
@@ -653,6 +590,104 @@ func (m Model) renderSettings() string {
 	}
 
 	return boxStyle.Render(content)
+}
+
+// renderModeDropdown renders a visual dropdown menu for operating mode
+func (m Model) renderModeDropdown() string {
+	modes := []struct {
+		value string
+		desc  string
+	}{
+		{"remote", "Transcode files from remote server via SFTP"},
+		{"local", "Transcode files from local directories"},
+	}
+
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	for i, mode := range modes {
+		var line string
+		if i == m.modeDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-8s ", mode.value))
+			line += " " + descStyle.Render(mode.desc)
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %-8s ", mode.value))
+			line += " " + descStyle.Render(mode.desc)
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
+}
+
+// renderCodecDropdown renders a visual dropdown menu for encoder codec
+func (m Model) renderCodecDropdown() string {
+	codecs := []struct {
+		value string
+		desc  string
+	}{
+		{"auto", "Auto-detect best available encoder"},
+		{"hevc_videotoolbox", "macOS hardware (VideoToolbox)"},
+		{"hevc_vaapi", "Linux hardware (VAAPI Intel/AMD)"},
+		{"libx265", "Software encoding (slower, universal)"},
+	}
+
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	for i, codec := range codecs {
+		var line string
+		if i == m.codecDropdownIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-18s ", codec.value))
+			line += " " + descStyle.Render(codec.desc)
+		} else {
+			line = itemStyle.Render(fmt.Sprintf("   %-18s ", codec.value))
+			line += " " + descStyle.Render(codec.desc)
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
 }
 
 // renderSSHPoolSizeDropdown renders a visual dropdown menu for SSH pool size

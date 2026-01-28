@@ -135,6 +135,10 @@ type Model struct {
 	keepOriginalDropdownIndex int    // Currently highlighted keep original option in dropdown
 	showSkipChecksumDropdown  bool   // Show skip checksum dropdown menu
 	skipChecksumDropdownIndex int    // Currently highlighted skip checksum option in dropdown
+	showModeDropdown          bool   // Show mode dropdown menu
+	modeDropdownIndex         int    // Currently highlighted mode in dropdown (0=remote, 1=local)
+	showCodecDropdown         bool   // Show codec dropdown menu
+	codecDropdownIndex        int    // Currently highlighted codec in dropdown
 	showSaveDiscardPrompt     bool   // Show save/discard prompt when config modified
 	saveDiscardPromptIndex    int    // Currently highlighted option (0=Save, 1=Discard)
 
@@ -199,7 +203,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 
 // initSettingsInputs initializes the textinput fields for settings
 func (m *Model) initSettingsInputs() {
-	inputs := make([]textinput.Model, 13)
+	inputs := make([]textinput.Model, 16)
 
 	// 0: Host
 	inputs[0] = textinput.New()
@@ -286,6 +290,20 @@ func (m *Model) initSettingsInputs() {
 		inputs[12].SetValue("No")
 	}
 	inputs[12].CharLimit = 3
+
+	// 13: Mode (display only - uses dropdown)
+	inputs[13] = textinput.New()
+	inputs[13].SetValue(string(m.cfg.Mode))
+
+	// 14: Local Media Paths (comma-separated)
+	inputs[14] = textinput.New()
+	inputs[14].Placeholder = "Comma-separated paths"
+	inputs[14].SetValue(strings.Join(m.cfg.Local.MediaPaths, ", "))
+	inputs[14].CharLimit = 500
+
+	// 15: Codec (display only - uses dropdown)
+	inputs[15] = textinput.New()
+	inputs[15].SetValue(m.cfg.Encoder.Codec)
 
 	m.settingsInputs = inputs
 }
@@ -1691,6 +1709,24 @@ func (m *Model) applySettingValue(index int) error {
 			return fmt.Errorf("skip checksum must be Yes or No")
 		}
 		m.configModified = true
+
+	case 13: // Mode (dropdown-only, handled in dropdown handler)
+		return nil
+
+	case 14: // Local Media Paths
+		paths := strings.Split(value, ",")
+		cleanPaths := make([]string, 0, len(paths))
+		for _, p := range paths {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				cleanPaths = append(cleanPaths, trimmed)
+			}
+		}
+		m.cfg.Local.MediaPaths = cleanPaths
+		m.configModified = true
+
+	case 15: // Codec (dropdown-only, handled in dropdown handler)
+		return nil
 	}
 
 	return nil
@@ -1733,6 +1769,12 @@ func (m *Model) revertSettingValue(index int) {
 		} else {
 			m.settingsInputs[index].SetValue("No")
 		}
+	case 13:
+		m.settingsInputs[index].SetValue(string(m.cfg.Mode))
+	case 14:
+		m.settingsInputs[index].SetValue(strings.Join(m.cfg.Local.MediaPaths, ", "))
+	case 15:
+		m.settingsInputs[index].SetValue(m.cfg.Encoder.Codec)
 	}
 }
 
@@ -1874,6 +1916,77 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle mode dropdown navigation
+	if m.showModeDropdown {
+		modes := []config.OperatingMode{config.ModeRemote, config.ModeLocal}
+		switch msg.String() {
+		case "up", "k":
+			if m.modeDropdownIndex > 0 {
+				m.modeDropdownIndex--
+			}
+			return m, nil
+		case "down", "j":
+			if m.modeDropdownIndex < len(modes)-1 {
+				m.modeDropdownIndex++
+			}
+			return m, nil
+		case "enter":
+			// Select the highlighted mode
+			m.cfg.Mode = modes[m.modeDropdownIndex]
+			m.settingsInputs[13].SetValue(string(modes[m.modeDropdownIndex]))
+			m.showModeDropdown = false
+			m.isEditingSettings = false
+			m.configModified = true
+			m.statusMsg = fmt.Sprintf("Mode set to: %s", modes[m.modeDropdownIndex])
+			return m, nil
+		case "esc":
+			// Cancel dropdown
+			m.showModeDropdown = false
+			m.isEditingSettings = false
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Handle codec dropdown navigation
+	if m.showCodecDropdown {
+		codecs := []string{"auto", "hevc_videotoolbox", "hevc_vaapi", "libx265"}
+		switch msg.String() {
+		case "up", "k":
+			if m.codecDropdownIndex > 0 {
+				m.codecDropdownIndex--
+			}
+			return m, nil
+		case "down", "j":
+			if m.codecDropdownIndex < len(codecs)-1 {
+				m.codecDropdownIndex++
+			}
+			return m, nil
+		case "enter":
+			// Select the highlighted codec
+			selectedCodec := codecs[m.codecDropdownIndex]
+			if selectedCodec == "auto" {
+				// Auto-detect the best codec
+				selectedCodec = config.DetectBestCodec()
+				m.statusMsg = fmt.Sprintf("Codec auto-detected: %s", selectedCodec)
+			} else {
+				m.statusMsg = fmt.Sprintf("Codec set to: %s", selectedCodec)
+			}
+			m.cfg.Encoder.Codec = selectedCodec
+			m.settingsInputs[15].SetValue(selectedCodec)
+			m.showCodecDropdown = false
+			m.isEditingSettings = false
+			m.configModified = true
+			return m, nil
+		case "esc":
+			// Cancel dropdown
+			m.showCodecDropdown = false
+			m.isEditingSettings = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// Handle SSH pool size dropdown navigation
 	if m.showSSHPoolSizeDropdown {
 		switch msg.String() {
@@ -1979,7 +2092,7 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.selectedSetting < 12 { // 13 editable settings (0-12)
+		if m.selectedSetting < 15 { // 16 editable settings (0-15)
 			m.selectedSetting++
 		}
 
@@ -2075,6 +2188,41 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.skipChecksumDropdownIndex = 1
 			} else {
 				m.skipChecksumDropdownIndex = 0
+			}
+			return m, nil
+		} else if m.selectedSetting == 13 {
+			// Mode field - show dropdown
+			m.isEditingSettings = true
+			m.showModeDropdown = true
+			m.validationError = ""
+
+			// Set current mode index (0=remote, 1=local)
+			if m.cfg.Mode == config.ModeLocal {
+				m.modeDropdownIndex = 1
+			} else {
+				m.modeDropdownIndex = 0
+			}
+			return m, nil
+		} else if m.selectedSetting == 14 {
+			// Local Media Paths field - regular textinput editing
+			m.isEditingSettings = true
+			m.settingsInputs[m.selectedSetting].Focus()
+			m.validationError = ""
+			return m, textinput.Blink
+		} else if m.selectedSetting == 15 {
+			// Codec field - show dropdown
+			m.isEditingSettings = true
+			m.showCodecDropdown = true
+			m.validationError = ""
+
+			// Find current codec index
+			codecs := []string{"auto", "hevc_videotoolbox", "hevc_vaapi", "libx265"}
+			m.codecDropdownIndex = 0 // Default to auto
+			for i, codec := range codecs {
+				if codec == m.cfg.Encoder.Codec {
+					m.codecDropdownIndex = i
+					break
+				}
 			}
 			return m, nil
 		} else {

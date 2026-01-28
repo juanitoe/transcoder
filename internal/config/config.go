@@ -3,7 +3,10 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -318,6 +321,36 @@ func (c *Config) GetMediaPaths() []string {
 // IsLocalMode returns true if operating in local mode
 func (c *Config) IsLocalMode() bool {
 	return c.Mode == ModeLocal
+}
+
+// DetectBestCodec detects the best available HEVC encoder for the current platform
+func DetectBestCodec() string {
+	switch runtime.GOOS {
+	case "darwin":
+		// macOS: try VideoToolbox
+		if codecAvailable("hevc_videotoolbox") {
+			return "hevc_videotoolbox"
+		}
+	case "linux":
+		// Linux: try VAAPI (Intel/AMD hardware encoding)
+		if _, err := os.Stat("/dev/dri/renderD128"); err == nil {
+			if codecAvailable("hevc_vaapi") {
+				return "hevc_vaapi"
+			}
+		}
+	}
+	// Fallback: software encoding (slower, but universal)
+	return "libx265"
+}
+
+// codecAvailable checks if a specific codec is available in ffmpeg
+func codecAvailable(codec string) bool {
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-encoders")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(output), codec)
 }
 
 // Save writes the configuration to a YAML file
