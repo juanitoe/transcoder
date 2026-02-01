@@ -13,12 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - uses: actions/setup-go@v5
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
       - name: Run golangci-lint
         run: golangci-lint run ./... --timeout=5m
@@ -29,12 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - uses: actions/setup-go@v5
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
+          go-version-file: 'go.mod'
+          cache: true
 
       - name: Run tests
         run: go test -v ./...
@@ -56,12 +55,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - uses: actions/setup-go@v5
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
+          go-version-file: 'go.mod'
+          cache: true
 
       - name: Build
         env:

@@ -33,6 +33,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
       - name: Get version info
         id: version
         run: |
