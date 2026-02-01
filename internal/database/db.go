@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // CGO SQLite driver (more stable)
+	_ "modernc.org/sqlite" // Pure Go SQLite driver (no CGO required)
 
 	"transcoder/internal/types"
 )
@@ -41,7 +41,7 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	conn, err := sql.Open("sqlite3", dbPath)
+	conn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

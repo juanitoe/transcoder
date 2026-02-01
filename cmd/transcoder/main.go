@@ -15,6 +15,7 @@ import (
 	"transcoder/internal/scanner"
 	"transcoder/internal/transcode"
 	"transcoder/internal/tui"
+	"transcoder/internal/version"
 )
 
 func runTUI() error {
@@ -113,6 +114,12 @@ func runTUI() error {
 }
 
 func main() {
+	// Handle --version flag before anything else
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("transcoder %s\n", version.GetVersion())
+		return
+	}
+
 	if err := runTUI(); err != nil {
 		log.Fatal(err)
 	}
