@@ -594,131 +594,30 @@ func (m Model) renderSettings() string {
 
 // renderModeDropdown renders a visual dropdown menu for operating mode
 func (m Model) renderModeDropdown() string {
-	modes := []struct {
-		value string
-		desc  string
-	}{
+	items := []DropdownItem{
 		{"remote", "Transcode files from remote server via SFTP"},
 		{"local", "Transcode files from local directories"},
 	}
-
-	dropdownStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1).
-		MarginLeft(6)
-
-	selectedItemStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
-
-	var dropdown string
-	dropdown += "\n"
-
-	for i, mode := range modes {
-		var line string
-		if i == m.modeDropdownIndex {
-			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-8s ", mode.value))
-			line += " " + descStyle.Render(mode.desc)
-		} else {
-			line = itemStyle.Render(fmt.Sprintf("   %-8s ", mode.value))
-			line += " " + descStyle.Render(mode.desc)
-		}
-		dropdown += line + "\n"
-	}
-
-	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
-
-	return dropdownStyle.Render(dropdown) + "\n"
+	return renderDropdown(items, m.modeDropdownIndex, 8)
 }
 
 // renderCodecDropdown renders a visual dropdown menu for encoder codec
 func (m Model) renderCodecDropdown() string {
-	codecs := []struct {
-		value string
-		desc  string
-	}{
+	items := []DropdownItem{
 		{"auto", "Auto-detect best available encoder"},
 		{"hevc_videotoolbox", "macOS hardware (VideoToolbox)"},
 		{"hevc_vaapi", "Linux hardware (VAAPI Intel/AMD)"},
 		{"libx265", "Software encoding (slower, universal)"},
 	}
-
-	dropdownStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1).
-		MarginLeft(6)
-
-	selectedItemStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
-
-	var dropdown string
-	dropdown += "\n"
-
-	for i, codec := range codecs {
-		var line string
-		if i == m.codecDropdownIndex {
-			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-18s ", codec.value))
-			line += " " + descStyle.Render(codec.desc)
-		} else {
-			line = itemStyle.Render(fmt.Sprintf("   %-18s ", codec.value))
-			line += " " + descStyle.Render(codec.desc)
-		}
-		dropdown += line + "\n"
-	}
-
-	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
-
-	return dropdownStyle.Render(dropdown) + "\n"
+	return renderDropdown(items, m.codecDropdownIndex, 18)
 }
 
 // renderSSHPoolSizeDropdown renders a visual dropdown menu for SSH pool size
 func (m Model) renderSSHPoolSizeDropdown() string {
-	dropdownStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1).
-		MarginLeft(6)
-
-	selectedItemStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
-
-	var dropdown string
-	dropdown += "\n"
-
-	// Create dropdown items for pool sizes 1-16
+	// Build items for pool sizes 1-16 with appropriate descriptions
+	items := make([]DropdownItem, 16)
 	for i := 1; i <= 16; i++ {
-		var line string
 		var desc string
-
-		// Provide helpful descriptions for common values
 		switch i {
 		case 1:
 			desc = "Minimal - single connection per worker"
@@ -733,213 +632,54 @@ func (m Model) renderSSHPoolSizeDropdown() string {
 		default:
 			desc = fmt.Sprintf("%d parallel SSH connections per worker", i)
 		}
-
-		if i-1 == m.sshPoolSizeDropdownIndex {
-			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %2d ", i))
-			line += " " + descStyle.Render(desc)
-		} else {
-			line = itemStyle.Render(fmt.Sprintf("   %2d ", i))
-			line += " " + descStyle.Render(desc)
-		}
-		dropdown += line + "\n"
+		items[i-1] = DropdownItem{Value: fmt.Sprintf("%d", i), Desc: desc}
 	}
-
-	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
-
-	return dropdownStyle.Render(dropdown) + "\n"
+	return renderDropdown(items, m.sshPoolSizeDropdownIndex, 2)
 }
 
 // renderLogLevelDropdown renders a visual dropdown menu for log level
 func (m Model) renderLogLevelDropdown() string {
-	levels := []string{"debug", "info", "warn", "error"}
-	descriptions := []string{
-		"Detailed debugging information",
-		"General informational messages",
-		"Warning messages for potential issues",
-		"Error messages only",
+	items := []DropdownItem{
+		{"debug", "Detailed debugging information"},
+		{"info", "General informational messages"},
+		{"warn", "Warning messages for potential issues"},
+		{"error", "Error messages only"},
 	}
-
-	dropdownStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1).
-		MarginLeft(6)
-
-	selectedItemStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
-
-	var dropdown string
-	dropdown += "\n"
-
-	for i, level := range levels {
-		var line string
-		if i == m.logLevelDropdownIndex {
-			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-8s ", level))
-			line += " " + descStyle.Render(descriptions[i])
-		} else {
-			line = itemStyle.Render(fmt.Sprintf("   %-8s ", level))
-			line += " " + descStyle.Render(descriptions[i])
-		}
-		dropdown += line + "\n"
-	}
-
-	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
-
-	return dropdownStyle.Render(dropdown) + "\n"
+	return renderDropdown(items, m.logLevelDropdownIndex, 8)
 }
 
 // renderKeepOriginalDropdown renders a visual dropdown menu for keep original setting
 func (m Model) renderKeepOriginalDropdown() string {
-	options := []string{"No", "Yes"}
-	descriptions := []string{
-		"Delete original file after successful transcode",
-		"Keep original file (move to backup location)",
+	items := []DropdownItem{
+		{"No", "Delete original file after successful transcode"},
+		{"Yes", "Keep original file (move to backup location)"},
 	}
-
-	dropdownStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1).
-		MarginLeft(6)
-
-	selectedItemStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
-
-	var dropdown string
-	dropdown += "\n"
-
-	for i, option := range options {
-		var line string
-		if i == m.keepOriginalDropdownIndex {
-			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-4s ", option))
-			line += " " + descStyle.Render(descriptions[i])
-		} else {
-			line = itemStyle.Render(fmt.Sprintf("   %-4s ", option))
-			line += " " + descStyle.Render(descriptions[i])
-		}
-		dropdown += line + "\n"
-	}
-
-	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
-
-	return dropdownStyle.Render(dropdown) + "\n"
+	return renderDropdown(items, m.keepOriginalDropdownIndex, 4)
 }
 
 // renderSkipChecksumDropdown renders a visual dropdown menu for skip checksum setting
 func (m Model) renderSkipChecksumDropdown() string {
-	options := []string{"No", "Yes"}
-	descriptions := []string{
-		"Verify file integrity with checksums (safer)",
-		"Skip checksum verification (faster but less safe)",
+	items := []DropdownItem{
+		{"No", "Verify file integrity with checksums (safer)"},
+		{"Yes", "Skip checksum verification (faster but less safe)"},
 	}
-
-	dropdownStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1).
-		MarginLeft(6)
-
-	selectedItemStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
-
-	var dropdown string
-	dropdown += "\n"
-
-	for i, option := range options {
-		var line string
-		if i == m.skipChecksumDropdownIndex {
-			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-4s ", option))
-			line += " " + descStyle.Render(descriptions[i])
-		} else {
-			line = itemStyle.Render(fmt.Sprintf("   %-4s ", option))
-			line += " " + descStyle.Render(descriptions[i])
-		}
-		dropdown += line + "\n"
-	}
-
-	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
-
-	return dropdownStyle.Render(dropdown) + "\n"
+	return renderDropdown(items, m.skipChecksumDropdownIndex, 4)
 }
 
 // renderPresetDropdown renders a visual dropdown menu for encoder presets
 func (m Model) renderPresetDropdown() string {
-	presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
-	descriptions := []string{
-		"Fastest encoding, largest files",
-		"Very fast, larger files",
-		"Fast encoding, large files",
-		"Faster encoding, balanced",
-		"Fast, good balance",
-		"Balanced speed/quality",
-		"Slower, smaller files",
-		"Very slow, much smaller",
-		"Slowest, smallest files",
+	items := []DropdownItem{
+		{"ultrafast", "Fastest encoding, largest files"},
+		{"superfast", "Very fast, larger files"},
+		{"veryfast", "Fast encoding, large files"},
+		{"faster", "Faster encoding, balanced"},
+		{"fast", "Fast, good balance"},
+		{"medium", "Balanced speed/quality"},
+		{"slow", "Slower, smaller files"},
+		{"slower", "Very slow, much smaller"},
+		{"veryslow", "Slowest, smallest files"},
 	}
-
-	dropdownStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(0, 1).
-		MarginLeft(6)
-
-	selectedItemStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("62")).
-		Foreground(lipgloss.Color("230")).
-		Bold(true)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
-
-	var dropdown string
-	dropdown += "\n"
-
-	for i, preset := range presets {
-		var line string
-		if i == m.presetDropdownIndex {
-			line = selectedItemStyle.Render(fmt.Sprintf(" ▶ %-10s ", preset))
-			line += " " + descStyle.Render(descriptions[i])
-		} else {
-			line = itemStyle.Render(fmt.Sprintf("   %-10s ", preset))
-			line += " " + descStyle.Render(descriptions[i])
-		}
-		dropdown += line + "\n"
-	}
-
-	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
-
-	return dropdownStyle.Render(dropdown) + "\n"
+	return renderDropdown(items, m.presetDropdownIndex, 10)
 }
 
 // renderSaveDiscardPrompt renders the save/discard choice prompt
@@ -1127,7 +867,8 @@ func (m Model) renderLogs() string {
 		height = 24 // Fallback default
 	}
 
-	if len(m.logs) == 0 {
+	totalLogs := m.logBuffer.Len()
+	if totalLogs == 0 {
 		content := title + statusStyle.Render("No logs yet")
 		return boxStyle.Width(width - 4).Render(content)
 	}
@@ -1141,9 +882,6 @@ func (m Model) renderLogs() string {
 
 	// Calculate the window of logs to display based on scroll offset
 	// Display logs in reverse order (newest first)
-	totalLogs := len(m.logs)
-
-	// startIdx is from the end (newest), counting backwards
 	startIdx := m.logScrollOffset
 	endIdx := startIdx + availableHeight
 
@@ -1165,8 +903,9 @@ func (m Model) renderLogs() string {
 		maxLogWidth = 20 // Minimum width
 	}
 
-	for i := endIdx - 1; i >= startIdx; i-- {
-		logEntry := m.logs[totalLogs-1-i]
+	for i := startIdx; i < endIdx; i++ {
+		// GetFromEnd: 0 = newest, so i gives us newest at top
+		logEntry := m.logBuffer.GetFromEnd(i)
 
 		// Truncate long log lines to fit width
 		if len(logEntry) > maxLogWidth {
@@ -1212,4 +951,53 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// DropdownItem represents an item in a dropdown menu
+type DropdownItem struct {
+	Value string
+	Desc  string
+}
+
+// renderDropdown renders a generic dropdown menu with consistent styling
+func renderDropdown(items []DropdownItem, selectedIdx int, valueWidth int) string {
+	dropdownStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(0, 1).
+		MarginLeft(6)
+
+	selectedItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Bold(true)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Italic(true)
+
+	var dropdown string
+	dropdown += "\n"
+
+	formatStr := fmt.Sprintf(" ▶ %%-%ds ", valueWidth)
+	formatStrNormal := fmt.Sprintf("   %%-%ds ", valueWidth)
+
+	for i, item := range items {
+		var line string
+		if i == selectedIdx {
+			line = selectedItemStyle.Render(fmt.Sprintf(formatStr, item.Value))
+			line += " " + descStyle.Render(item.Desc)
+		} else {
+			line = itemStyle.Render(fmt.Sprintf(formatStrNormal, item.Value))
+			line += " " + descStyle.Render(item.Desc)
+		}
+		dropdown += line + "\n"
+	}
+
+	dropdown += "\n" + helpStyle.Render("  ↑↓ Navigate  •  Enter Select  •  Esc Cancel")
+
+	return dropdownStyle.Render(dropdown) + "\n"
 }

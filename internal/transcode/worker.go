@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"transcoder/internal/checksum"
@@ -103,7 +104,7 @@ func (wp *WorkerPool) ScaleWorkers(newCount int) {
 	} else if newCount < currentCount {
 		// Signal excess workers to stop after their current job completes
 		for i := newCount; i < currentCount; i++ {
-			wp.workers[i].stopping = true
+			wp.workers[i].stopping.Store(true)
 		}
 		// Keep them in the slice until they actually stop
 		// They'll exit after finishing their current job
@@ -137,7 +138,7 @@ type Worker struct {
 	encoder      *Encoder
 	progressChan chan types.ProgressUpdate
 	wg           sync.WaitGroup
-	stopping     bool // Signal to stop after current job completes
+	stopping     atomic.Bool // Signal to stop after current job completes
 }
 
 // NewWorker creates a new worker
@@ -168,7 +169,7 @@ func (w *Worker) Run(ctx context.Context, pauseRequests, cancelRequests map[int6
 		}
 
 		// Check if this worker should stop (graceful shutdown after scaling down)
-		if w.stopping {
+		if w.stopping.Load() {
 			return
 		}
 
@@ -217,17 +218,22 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		jobScanner, err = scanner.New(w.cfg, w.db)
 		if err != nil {
 			logging.Error("[%s] Job %d failed: Failed to create scanner: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to create scanner: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to create scanner: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			return
 		}
+		// Register cleanup before Connect() to avoid leak if Connect() fails
+		defer func() { _ = jobScanner.Close() }()
 
 		// Establish SSH/SFTP connection
 		if err := jobScanner.Connect(jobCtx); err != nil {
 			logging.Error("[%s] Job %d failed: Failed to connect to remote server: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to connect to remote server: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to connect to remote server: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			return
 		}
-		defer func() { _ = jobScanner.Close() }()
 	}
 
 	// Monitor for pause/cancel requests
@@ -243,7 +249,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				// Check for cancel request
 				if cancelRequests[job.ID] {
 					delete(cancelRequests, job.ID)
-					_ = w.db.CancelJob(job.ID)
+					if err := w.db.CancelJob(job.ID); err != nil {
+						logging.Warn("[worker-%d] Failed to cancel job %d: %v", w.id, job.ID, err)
+					}
 					jobCancel()
 					return
 				}
@@ -251,7 +259,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				// Check for pause request
 				if pauseRequests[job.ID] {
 					delete(pauseRequests, job.ID)
-					_ = w.db.PauseJob(job.ID)
+					if err := w.db.PauseJob(job.ID); err != nil {
+						logging.Warn("[worker-%d] Failed to pause job %d: %v", w.id, job.ID, err)
+					}
 					jobCancel()
 					return
 				}
@@ -265,7 +275,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	// Create work directory if it doesn't exist
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		logging.Error("[%s] Job %d failed: Failed to create work directory: %v", workerID, job.ID, err)
-		_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to create work directory: %v", err))
+		if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to create work directory: %v", err)); dbErr != nil {
+			logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+		}
 		return
 	}
 
@@ -304,7 +316,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			localInputChecksum = result.Hash
 		}
 	} else if _, err := os.Stat(localInputPath); os.IsNotExist(err) {
-		_ = w.db.UpdateJobStatus(job.ID, types.StatusDownloading, types.StageDownload, 0)
+		if dbErr := w.db.UpdateJobStatus(job.ID, types.StatusDownloading, types.StageDownload, 0); dbErr != nil {
+			logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+		}
 		w.updateProgress(job.ID, types.StageDownload, 0, "Downloading", 0, job.FileSizeBytes)
 		localInputChecksum, err = jobScanner.DownloadFileWithChecksum(jobCtx, job.FilePath, localInputPath, func(bytesRead, totalBytes int64) {
 			progress := (float64(bytesRead) / float64(totalBytes)) * 100
@@ -313,7 +327,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 		if err != nil {
 			logging.Error("[%s] Job %d failed: Download failed: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Download failed: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Download failed: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			return
 		}
 	} else {
@@ -350,7 +366,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				result, err := checksum.CalculateFile(localOutputPath)
 				if err != nil {
 					logging.Error("[%s] Job %d failed: Failed to calculate output checksum: %v", workerID, job.ID, err)
-					_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
+					if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err)); dbErr != nil {
+						logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+					}
 					return
 				}
 				localOutputChecksum = result.Hash
@@ -365,7 +383,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 				result, err := checksum.CalculateFile(localOutputPath)
 				if err != nil {
 					logging.Error("[%s] Job %d failed: Failed to calculate output checksum: %v", workerID, job.ID, err)
-					_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
+					if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err)); dbErr != nil {
+						logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+					}
 					return
 				}
 				localOutputChecksum = result.Hash
@@ -397,7 +417,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			if !shouldProceed || estimatedSavings < minSavings {
 				skipReason := fmt.Sprintf("Skipped: %s (expected %d%% < min %d%%)", reason, estimatedSavings, minSavings)
 				logging.Info("[%s] Job %d skipped pre-transcode: %s", workerID, job.ID, skipReason)
-				_ = w.db.SkipJob(job.ID, skipReason, 0)
+				if dbErr := w.db.SkipJob(job.ID, skipReason, 0); dbErr != nil {
+					logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+				}
 				// Clean up downloaded file
 				_ = os.Remove(localInputPath)
 				return
@@ -407,7 +429,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			logging.Warn("[%s] Job %d: Could not get media file info for pre-transcode check, proceeding anyway", workerID, job.ID)
 		}
 
-		_ = w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0)
+		if dbErr := w.db.UpdateJobStatus(job.ID, types.StatusTranscoding, types.StageTranscode, 0); dbErr != nil {
+			logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+		}
 		w.updateProgress(job.ID, types.StageTranscode, 0, "Transcoding", 0, 0)
 
 		// Start a goroutine to periodically update file size and check for early termination
@@ -425,7 +449,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 					// Check output file size
 					if fileInfo, err := os.Stat(localOutputPath); err == nil {
 						currentSize := fileInfo.Size()
-						_ = w.db.UpdateJobFileSize(job.ID, currentSize)
+						if dbErr := w.db.UpdateJobFileSize(job.ID, currentSize); dbErr != nil {
+							logging.Warn("[worker-%d] Failed to update job file size: %v", w.id, dbErr)
+						}
 
 						// Early termination: if output already exceeds original, stop transcoding
 						if !w.cfg.Encoder.AllowLargerOutput && currentSize > job.FileSizeBytes {
@@ -466,7 +492,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			reason := fmt.Sprintf("Transcoded file exceeded original during encoding (%.1f%% larger at %d bytes, original %d bytes)",
 				sizeIncrease, exceededSize, job.FileSizeBytes)
 			logging.Info("[%s] Job %d skipped (early termination): %s", workerID, job.ID, reason)
-			_ = w.db.SkipJob(job.ID, reason, exceededSize)
+			if dbErr := w.db.SkipJob(job.ID, reason, exceededSize); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			// Clean up partial output file
 			_ = os.Remove(localOutputPath)
 			return
@@ -475,7 +503,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 		if err != nil {
 			logging.Error("[%s] Job %d failed: Transcode failed: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Transcode failed: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Transcode failed: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			return
 		}
 
@@ -490,7 +520,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		w.updateProgress(job.ID, types.StageValidate, 0, "Validating", 0, 0)
 		if err := w.encoder.Verify(jobCtx, localOutputPath); err != nil {
 			logging.Error("[%s] Job %d failed: Validation failed: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Validation failed: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Validation failed: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			return
 		}
 
@@ -498,7 +530,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		result, err := checksum.CalculateFile(localOutputPath)
 		if err != nil {
 			logging.Error("[%s] Job %d failed: Failed to calculate output checksum: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to calculate output checksum: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			return
 		}
 		localOutputChecksum = result.Hash
@@ -516,7 +550,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	transcodedInfo, err := w.encoder.GetFileInfo(localOutputPath)
 	if err != nil {
 		logging.Error("[%s] Job %d failed: Failed to get transcoded file info: %v", workerID, job.ID, err)
-		_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to get transcoded file info: %v", err))
+		if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to get transcoded file info: %v", err)); dbErr != nil {
+			logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+		}
 		return
 	}
 
@@ -526,7 +562,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		reason := fmt.Sprintf("Transcoded file is larger than original (%.1f%% increase: %d -> %d bytes)",
 			sizeIncrease, job.FileSizeBytes, transcodedInfo.Size)
 		logging.Info("[%s] Job %d skipped: %s", workerID, job.ID, reason)
-		_ = w.db.SkipJob(job.ID, reason, transcodedInfo.Size)
+		if dbErr := w.db.SkipJob(job.ID, reason, transcodedInfo.Size); dbErr != nil {
+			logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+		}
 		// Clean up local transcoded file
 		_ = os.Remove(localOutputPath)
 		return
@@ -537,13 +575,17 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 	if w.cfg.IsLocalMode() {
 		// Local mode: replace file directly without upload
-		_ = w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
+		if dbErr := w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0); dbErr != nil {
+			logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+		}
 		w.updateProgress(job.ID, types.StageUpload, 0, "Replacing original file", 0, transcodedInfo.Size)
 
 		// Replace original file with transcoded file
 		if err := w.replaceLocalFile(job.FilePath, localOutputPath, w.cfg.Files.KeepOriginal); err != nil {
 			logging.Error("[%s] Job %d failed: Failed to replace original file: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to replace original file: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to replace original file: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			_ = os.Remove(localOutputPath) // Clean up transcoded file
 			return
 		}
@@ -553,7 +595,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 		w.updateProgress(job.ID, types.StageUpload, 100, "File replaced successfully", transcodedInfo.Size, transcodedInfo.Size)
 	} else {
 		// Remote mode: upload via SFTP
-		_ = w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0)
+		if dbErr := w.db.UpdateJobStatus(job.ID, types.StatusUploading, types.StageUpload, 0); dbErr != nil {
+			logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+		}
 		w.updateProgress(job.ID, types.StageUpload, 0, "Uploading", 0, transcodedInfo.Size)
 
 		// Upload to temporary location first
@@ -565,7 +609,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 
 		if err != nil {
 			logging.Error("[%s] Job %d failed: Upload failed: %v", workerID, job.ID, err)
-			_ = w.db.FailJob(job.ID, fmt.Sprintf("Upload failed: %v", err))
+			if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Upload failed: %v", err)); dbErr != nil {
+				logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+			}
 			return
 		}
 
@@ -577,7 +623,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			} else {
 				// Fail job on checksum mismatch
 				logging.Error("[%s] Job %d failed: Upload checksum mismatch: expected %s, got %s", workerID, job.ID, localOutputChecksum, uploadedChecksum)
-				_ = w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum))
+				if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Upload checksum mismatch: expected %s, got %s", localOutputChecksum, uploadedChecksum)); dbErr != nil {
+					logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+				}
 				_ = jobScanner.DeleteRemoteFile(remoteTempPath)
 				return
 			}
@@ -598,7 +646,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			originalBackupPath := job.FilePath + ".original"
 			if err := jobScanner.RenameRemoteFile(job.FilePath, originalBackupPath); err != nil {
 				logging.Error("[%s] Job %d failed: Failed to backup original file: %v", workerID, job.ID, err)
-				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to backup original file: %v", err))
+				if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to backup original file: %v", err)); dbErr != nil {
+					logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+				}
 				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
 				return
 			}
@@ -606,7 +656,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			// Rename transcoded file to original name (atomic operation)
 			if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
 				logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
-				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
+				if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err)); dbErr != nil {
+					logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+				}
 				// Try to restore original from backup
 				_ = jobScanner.RenameRemoteFile(originalBackupPath, job.FilePath)
 				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
@@ -618,7 +670,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			// Delete original file and replace with transcoded
 			if err := jobScanner.DeleteRemoteFile(job.FilePath); err != nil {
 				logging.Error("[%s] Job %d failed: Failed to delete original file: %v", workerID, job.ID, err)
-				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err))
+				if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to delete original file: %v", err)); dbErr != nil {
+					logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+				}
 				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
 				return
 			}
@@ -626,7 +680,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 			// Rename transcoded file to original name (atomic operation)
 			if err := jobScanner.RenameRemoteFile(remoteTempPath, job.FilePath); err != nil {
 				logging.Error("[%s] Job %d failed: Failed to rename transcoded file: %v", workerID, job.ID, err)
-				_ = w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err))
+				if dbErr := w.db.FailJob(job.ID, fmt.Sprintf("Failed to rename transcoded file: %v", err)); dbErr != nil {
+					logging.Warn("[%s] Failed to update job status: %v", workerID, dbErr)
+				}
 				_ = jobScanner.DeleteRemoteFile(remoteTempPath) // Clean up temp file
 				return
 			}
@@ -638,7 +694,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 	fps := 0.0 // We could calculate this from total frames / encoding time
 
 	// Complete the job with checksum information
-	_ = w.db.CompleteJobWithChecksums(job.ID, transcodedInfo.Size, encodingTime, fps, localInputChecksum, localOutputChecksum, uploadedChecksum)
+	if dbErr := w.db.CompleteJobWithChecksums(job.ID, transcodedInfo.Size, encodingTime, fps, localInputChecksum, localOutputChecksum, uploadedChecksum); dbErr != nil {
+		logging.Warn("[%s] Failed to complete job in database: %v", workerID, dbErr)
+	}
 	w.updateProgress(job.ID, types.StageUpload, 100, "Completed", transcodedInfo.Size, transcodedInfo.Size)
 
 	// Log successful completion with stats
@@ -656,7 +714,9 @@ func (w *Worker) processJob(ctx context.Context, job *types.TranscodeJob, pauseR
 // updateProgress sends a progress update
 func (w *Worker) updateProgress(jobID int64, stage types.ProcessingStage, progress float64, message string, bytesTransferred, totalBytes int64) {
 	// Update database with stage
-	_ = w.db.UpdateJobProgress(jobID, progress, 0.0, string(stage))
+	if err := w.db.UpdateJobProgress(jobID, progress, 0.0, string(stage)); err != nil {
+		logging.Warn("[worker-%d] Failed to update job progress: %v", w.id, err)
+	}
 
 	// Send to progress channel
 	select {

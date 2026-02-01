@@ -25,16 +25,17 @@ import (
 
 // Scanner handles remote media library scanning
 type Scanner struct {
-	cfg          *config.Config
-	db           *database.DB
-	sshClient    *ssh.Client  // Main SSH client
-	sftpClient   *sftp.Client // Main SFTP client for directory operations
-	sshPool      *sshPool     // Pool of SSH clients for parallel FFprobe
-	progress     ScanProgress
-	progressMu   sync.Mutex // Protects progress updates from concurrent workers
-	logFile      *os.File
-	logWriter    *bufio.Writer      // Buffered writer for efficient logging
-	checksumAlgo checksum.Algorithm // Detected remote checksum algorithm
+	cfg             *config.Config
+	db              *database.DB
+	sshClient       *ssh.Client  // Main SSH client
+	sftpClient      *sftp.Client // Main SFTP client for directory operations
+	sshPool         *sshPool     // Pool of SSH clients for parallel FFprobe
+	progress        ScanProgress
+	progressMu      sync.Mutex // Protects progress updates from concurrent workers
+	logFile         *os.File
+	logWriter       *bufio.Writer      // Buffered writer for efficient logging
+	checksumAlgo    checksum.Algorithm // Detected remote checksum algorithm
+	videoExtensions map[string]bool    // Pre-computed extension lookup map
 }
 
 // sshPool manages a pool of SSH connections for parallel operations
@@ -127,11 +128,23 @@ func New(cfg *config.Config, db *database.DB) (*Scanner, error) {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 
+	// Pre-compute video extensions map for O(1) lookup
+	videoExtensions := make(map[string]bool)
+	for _, ext := range cfg.Files.Extensions {
+		// Normalize extension (remove leading dot if present)
+		normalizedExt := strings.ToLower(ext)
+		if len(normalizedExt) > 0 && normalizedExt[0] == '.' {
+			normalizedExt = normalizedExt[1:]
+		}
+		videoExtensions[normalizedExt] = true
+	}
+
 	return &Scanner{
-		cfg:       cfg,
-		db:        db,
-		logFile:   logFile,
-		logWriter: bufio.NewWriter(logFile),
+		cfg:             cfg,
+		db:              db,
+		logFile:         logFile,
+		logWriter:       bufio.NewWriter(logFile),
+		videoExtensions: videoExtensions,
 	}, nil
 }
 
@@ -526,7 +539,7 @@ func (s *Scanner) scanPath(ctx context.Context, path string, progress *ScanProgr
 func (s *Scanner) processResults(ctx context.Context, resultsCh <-chan workResult, progress *ScanProgress, progressCb ProgressCallback, throttler *progressThrottler, startTime time.Time, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	const batchSize = 20
+	const batchSize = 100 // Increased from 20 for fewer small transactions
 	var newFiles []*types.MediaFile
 	updatedFiles := make(map[int64]*types.MediaFile)
 
@@ -833,7 +846,7 @@ func (s *Scanner) BackfillChecksums(ctx context.Context, progressCb ProgressCall
 	return nil
 }
 
-// isVideoFile checks if a file has a video extension
+// isVideoFile checks if a file has a video extension using O(1) map lookup
 func (s *Scanner) isVideoFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	// Remove leading dot from extension for comparison
@@ -841,18 +854,8 @@ func (s *Scanner) isVideoFile(filename string) bool {
 		ext = ext[1:]
 	}
 
-	// Use configured extensions
-	for _, configExt := range s.cfg.Files.Extensions {
-		// Normalize config extension (remove leading dot if present)
-		normalizedExt := strings.ToLower(configExt)
-		if len(normalizedExt) > 0 && normalizedExt[0] == '.' {
-			normalizedExt = normalizedExt[1:]
-		}
-		if ext == normalizedExt {
-			return true
-		}
-	}
-	return false
+	// Use pre-computed extension map for O(1) lookup
+	return s.videoExtensions[ext]
 }
 
 // shouldProcessFile checks if a file should be processed based on size and exclude patterns

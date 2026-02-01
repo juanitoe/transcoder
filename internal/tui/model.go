@@ -28,10 +28,76 @@ const (
 	ViewLogs
 )
 
+// Package-level constants for validation to avoid repeated allocations
+var (
+	validPresets   = []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
+	validLogLevels = []string{"debug", "info", "warn", "error"}
+	validCodecs    = []string{"auto", "hevc_videotoolbox", "hevc_vaapi", "libx265"}
+	boolOptions    = []string{"No", "Yes"}
+)
+
 // ProgressHistory tracks recent progress updates for bandwidth calculation
 type ProgressHistory struct {
 	Updates []types.ProgressUpdate // Circular buffer of recent updates
 	MaxSize int                    // Maximum number of updates to keep
+}
+
+// RingBuffer is a fixed-size circular buffer for log entries
+type RingBuffer struct {
+	data  []string
+	head  int  // Next write position
+	size  int  // Current number of items
+	cap   int  // Maximum capacity
+	full  bool // Whether buffer is at capacity
+}
+
+// NewRingBuffer creates a new ring buffer with the given capacity
+func NewRingBuffer(capacity int) *RingBuffer {
+	return &RingBuffer{
+		data: make([]string, capacity),
+		cap:  capacity,
+	}
+}
+
+// Add adds an item to the ring buffer
+func (rb *RingBuffer) Add(item string) {
+	rb.data[rb.head] = item
+	rb.head = (rb.head + 1) % rb.cap
+	if rb.size < rb.cap {
+		rb.size++
+	} else {
+		rb.full = true
+	}
+}
+
+// Len returns the current number of items in the buffer
+func (rb *RingBuffer) Len() int {
+	return rb.size
+}
+
+// Get returns the item at the given index (0 = oldest)
+func (rb *RingBuffer) Get(index int) string {
+	if index < 0 || index >= rb.size {
+		return ""
+	}
+	// Calculate actual position in the circular buffer
+	var actualPos int
+	if rb.full {
+		actualPos = (rb.head + index) % rb.cap
+	} else {
+		actualPos = index
+	}
+	return rb.data[actualPos]
+}
+
+// GetFromEnd returns items from the end (0 = newest)
+func (rb *RingBuffer) GetFromEnd(index int) string {
+	if index < 0 || index >= rb.size {
+		return ""
+	}
+	// Calculate position from the end
+	pos := (rb.head - 1 - index + rb.cap) % rb.cap
+	return rb.data[pos]
 }
 
 // Add adds a new progress update to the history
@@ -156,8 +222,7 @@ type Model struct {
 	searchSelectedIndex int                   // Selected index in search results
 
 	// Logs
-	logs            []string
-	maxLogs         int
+	logBuffer       *RingBuffer
 	logScrollOffset int
 	logChan         chan string // Channel to receive log entries from logging package
 }
@@ -188,8 +253,7 @@ func New(cfg *config.Config, db *database.DB, scanner *scanner.Scanner, workerPo
 		workerPool:   workerPool,
 		viewMode:     ViewDashboard,
 		lastUpdate:   time.Now(),
-		logs:         make([]string, 0),
-		maxLogs:      500,
+		logBuffer:    NewRingBuffer(500),
 		logChan:      logChan,
 		progressData: make(map[int64]*ProgressHistory),
 		configPath:   os.ExpandEnv("$HOME/transcoder/config.yaml"),
@@ -390,11 +454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for {
 			select {
 			case entry := <-m.logChan:
-				m.logs = append(m.logs, entry)
-				// Keep only the last maxLogs entries
-				if len(m.logs) > m.maxLogs {
-					m.logs = m.logs[len(m.logs)-m.maxLogs:]
-				}
+				m.logBuffer.Add(entry)
 			default:
 				goto doneDraining
 			}
@@ -526,16 +586,8 @@ func (m Model) View() string {
 // overlayJobActionDropdown overlays the action dropdown on top of the content
 func (m Model) overlayJobActionDropdown(content string) string {
 	// Get current job
-	var jobs []*types.TranscodeJob
-	var scrollOffset int
-
-	if m.jobsPanel == 0 {
-		jobs = m.activeJobs
-		scrollOffset = m.activeJobsScrollOffset
-	} else {
-		jobs = m.queuedJobs
-		scrollOffset = m.queuedJobsScrollOffset
-	}
+	jobs := m.currentJobList()
+	scrollOffset := *m.currentScrollOffset()
 
 	if m.selectedJob >= len(jobs) {
 		return content
@@ -605,16 +657,8 @@ func (m Model) overlayJobActionDropdown(content string) string {
 // overlayPriorityInput overlays the priority input on top of the content
 func (m Model) overlayPriorityInput(content string) string {
 	// Get current job
-	var jobs []*types.TranscodeJob
-	var scrollOffset int
-
-	if m.jobsPanel == 0 {
-		jobs = m.activeJobs
-		scrollOffset = m.activeJobsScrollOffset
-	} else {
-		jobs = m.queuedJobs
-		scrollOffset = m.queuedJobsScrollOffset
-	}
+	jobs := m.currentJobList()
+	scrollOffset := *m.currentScrollOffset()
 
 	if m.selectedJob >= len(jobs) {
 		return content
@@ -798,7 +842,7 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if availableHeight < 1 {
 				availableHeight = 10
 			}
-			maxScrollOffset := len(m.logs) - availableHeight
+			maxScrollOffset := m.logBuffer.Len() - availableHeight
 			if maxScrollOffset < 0 {
 				maxScrollOffset = 0
 			}
@@ -933,16 +977,8 @@ func (m Model) handleMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // calculateJobIndexFromClick calculates which job was clicked based on Y position
 func (m Model) calculateJobIndexFromClick(clickY int) int {
 	// Get current job list based on panel
-	var jobs []*types.TranscodeJob
-	var scrollOffset int
-
-	if m.jobsPanel == 0 {
-		jobs = m.activeJobs
-		scrollOffset = m.activeJobsScrollOffset
-	} else {
-		jobs = m.queuedJobs
-		scrollOffset = m.queuedJobsScrollOffset
-	}
+	jobs := m.currentJobList()
+	scrollOffset := *m.currentScrollOffset()
 
 	visibleHeight := m.calculateVisibleJobsHeight()
 
@@ -1068,18 +1104,9 @@ func (m Model) handleJobListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchInput(msg)
 	}
 
-	// Get current job list based on panel
-	var jobs []*types.TranscodeJob
-	var scrollOffset *int
-
-	// In Jobs view, switch based on panel
-	if m.jobsPanel == 0 {
-		jobs = m.activeJobs
-		scrollOffset = &m.activeJobsScrollOffset
-	} else {
-		jobs = m.queuedJobs
-		scrollOffset = &m.queuedJobsScrollOffset
-	}
+	// Get current job list and scroll offset based on panel
+	jobs := m.currentJobList()
+	scrollOffset := m.currentScrollOffset()
 
 	switch msg.String() {
 	case "tab":
@@ -1345,12 +1372,7 @@ func (m *Model) bulkCancelJobs() int {
 // handleJobActionDropdown handles keys when the job action dropdown is shown
 func (m Model) handleJobActionDropdown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Get current job
-	var jobs []*types.TranscodeJob
-	if m.jobsPanel == 0 {
-		jobs = m.activeJobs
-	} else {
-		jobs = m.queuedJobs
-	}
+	jobs := m.currentJobList()
 
 	if m.selectedJob >= len(jobs) {
 		m.showJobActionDropdown = false
@@ -1633,7 +1655,6 @@ func (m *Model) applySettingValue(index int) error {
 		m.configModified = true
 
 	case 6: // Preset
-		validPresets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
 		valid := false
 		for _, p := range validPresets {
 			if value == p {
@@ -1674,9 +1695,8 @@ func (m *Model) applySettingValue(index int) error {
 		m.configModified = true
 
 	case 10: // Log Level
-		validLevels := []string{"debug", "info", "warn", "error"}
 		valid := false
-		for _, level := range validLevels {
+		for _, level := range validLogLevels {
 			if value == level {
 				valid = true
 				break
@@ -1862,7 +1882,6 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Handle log level dropdown navigation
 	if m.showLogLevelDropdown {
-		levels := []string{"debug", "info", "warn", "error"}
 		switch msg.String() {
 		case "up", "k":
 			if m.logLevelDropdownIndex > 0 {
@@ -1870,18 +1889,18 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.logLevelDropdownIndex < len(levels)-1 {
+			if m.logLevelDropdownIndex < len(validLogLevels)-1 {
 				m.logLevelDropdownIndex++
 			}
 			return m, nil
 		case "enter":
 			// Select the highlighted log level
-			m.cfg.Logging.Level = levels[m.logLevelDropdownIndex]
-			m.settingsInputs[10].SetValue(levels[m.logLevelDropdownIndex])
+			m.cfg.Logging.Level = validLogLevels[m.logLevelDropdownIndex]
+			m.settingsInputs[10].SetValue(validLogLevels[m.logLevelDropdownIndex])
 			m.showLogLevelDropdown = false
 			m.isEditingSettings = false
 			m.configModified = true
-			m.statusMsg = fmt.Sprintf("Log level set to: %s", levels[m.logLevelDropdownIndex])
+			m.statusMsg = fmt.Sprintf("Log level set to: %s", validLogLevels[m.logLevelDropdownIndex])
 			return m, nil
 		case "esc":
 			// Cancel dropdown
@@ -1894,7 +1913,6 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Handle keep original dropdown navigation
 	if m.showKeepOriginalDropdown {
-		options := []string{"No", "Yes"}
 		switch msg.String() {
 		case "up", "k":
 			if m.keepOriginalDropdownIndex > 0 {
@@ -1902,18 +1920,18 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.keepOriginalDropdownIndex < len(options)-1 {
+			if m.keepOriginalDropdownIndex < len(boolOptions)-1 {
 				m.keepOriginalDropdownIndex++
 			}
 			return m, nil
 		case "enter":
 			// Select the highlighted option
 			m.cfg.Files.KeepOriginal = (m.keepOriginalDropdownIndex == 1)
-			m.settingsInputs[11].SetValue(options[m.keepOriginalDropdownIndex])
+			m.settingsInputs[11].SetValue(boolOptions[m.keepOriginalDropdownIndex])
 			m.showKeepOriginalDropdown = false
 			m.isEditingSettings = false
 			m.configModified = true
-			m.statusMsg = fmt.Sprintf("Keep original set to: %s", options[m.keepOriginalDropdownIndex])
+			m.statusMsg = fmt.Sprintf("Keep original set to: %s", boolOptions[m.keepOriginalDropdownIndex])
 			return m, nil
 		case "esc":
 			// Cancel dropdown
@@ -1926,7 +1944,6 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Handle skip checksum dropdown navigation
 	if m.showSkipChecksumDropdown {
-		options := []string{"No", "Yes"}
 		switch msg.String() {
 		case "up", "k":
 			if m.skipChecksumDropdownIndex > 0 {
@@ -1934,18 +1951,18 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.skipChecksumDropdownIndex < len(options)-1 {
+			if m.skipChecksumDropdownIndex < len(boolOptions)-1 {
 				m.skipChecksumDropdownIndex++
 			}
 			return m, nil
 		case "enter":
 			// Select the highlighted option
 			m.cfg.Workers.SkipChecksumVerification = (m.skipChecksumDropdownIndex == 1)
-			m.settingsInputs[12].SetValue(options[m.skipChecksumDropdownIndex])
+			m.settingsInputs[12].SetValue(boolOptions[m.skipChecksumDropdownIndex])
 			m.showSkipChecksumDropdown = false
 			m.isEditingSettings = false
 			m.configModified = true
-			m.statusMsg = fmt.Sprintf("Skip checksum set to: %s", options[m.skipChecksumDropdownIndex])
+			m.statusMsg = fmt.Sprintf("Skip checksum set to: %s", boolOptions[m.skipChecksumDropdownIndex])
 			return m, nil
 		case "esc":
 			// Cancel dropdown
@@ -1992,7 +2009,6 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Handle codec dropdown navigation
 	if m.showCodecDropdown {
-		codecs := []string{"auto", "hevc_videotoolbox", "hevc_vaapi", "libx265"}
 		switch msg.String() {
 		case "up", "k":
 			if m.codecDropdownIndex > 0 {
@@ -2000,13 +2016,13 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.codecDropdownIndex < len(codecs)-1 {
+			if m.codecDropdownIndex < len(validCodecs)-1 {
 				m.codecDropdownIndex++
 			}
 			return m, nil
 		case "enter":
 			// Select the highlighted codec
-			selectedCodec := codecs[m.codecDropdownIndex]
+			selectedCodec := validCodecs[m.codecDropdownIndex]
 			if selectedCodec == "auto" {
 				// Auto-detect the best codec
 				selectedCodec = config.DetectBestCodec()
@@ -2063,8 +2079,6 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Handle preset dropdown navigation
 	if m.showPresetDropdown {
-		presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
-
 		switch msg.String() {
 		case "up", "k":
 			if m.presetDropdownIndex > 0 {
@@ -2072,18 +2086,18 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.presetDropdownIndex < len(presets)-1 {
+			if m.presetDropdownIndex < len(validPresets)-1 {
 				m.presetDropdownIndex++
 			}
 			return m, nil
 		case "enter":
 			// Select the highlighted preset
-			m.cfg.Encoder.Preset = presets[m.presetDropdownIndex]
-			m.settingsInputs[6].SetValue(presets[m.presetDropdownIndex])
+			m.cfg.Encoder.Preset = validPresets[m.presetDropdownIndex]
+			m.settingsInputs[6].SetValue(validPresets[m.presetDropdownIndex])
 			m.showPresetDropdown = false
 			m.isEditingSettings = false
 			m.configModified = true
-			m.statusMsg = fmt.Sprintf("Preset set to: %s", presets[m.presetDropdownIndex])
+			m.statusMsg = fmt.Sprintf("Preset set to: %s", validPresets[m.presetDropdownIndex])
 			return m, nil
 		case "esc":
 			// Cancel dropdown
@@ -2178,9 +2192,8 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.validationError = ""
 
 			// Find current preset index
-			presets := []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}
 			currentPreset := m.cfg.Encoder.Preset
-			for i, p := range presets {
+			for i, p := range validPresets {
 				if p == currentPreset {
 					m.presetDropdownIndex = i
 					break
@@ -2194,8 +2207,7 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.validationError = ""
 
 			// Find current log level index
-			levels := []string{"debug", "info", "warn", "error"}
-			for i, level := range levels {
+			for i, level := range validLogLevels {
 				if level == m.cfg.Logging.Level {
 					m.logLevelDropdownIndex = i
 					break
@@ -2254,9 +2266,8 @@ func (m Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.validationError = ""
 
 			// Find current codec index
-			codecs := []string{"auto", "hevc_videotoolbox", "hevc_vaapi", "libx265"}
 			m.codecDropdownIndex = 0 // Default to auto
-			for i, codec := range codecs {
+			for i, codec := range validCodecs {
 				if codec == m.cfg.Encoder.Codec {
 					m.codecDropdownIndex = i
 					break
@@ -2303,7 +2314,7 @@ func (m Model) handleLogsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		availableHeight = 10
 	}
 
-	maxScrollOffset := len(m.logs) - availableHeight
+	maxScrollOffset := m.logBuffer.Len() - availableHeight
 	if maxScrollOffset < 0 {
 		maxScrollOffset = 0
 	}
@@ -2443,6 +2454,22 @@ func (m *Model) cycleJobFilter() {
 	m.selectedJob = 0
 	m.activeJobsScrollOffset = 0
 	m.queuedJobsScrollOffset = 0
+}
+
+// currentJobList returns the appropriate job list based on the current panel selection
+func (m Model) currentJobList() []*types.TranscodeJob {
+	if m.jobsPanel == 0 {
+		return m.activeJobs
+	}
+	return m.queuedJobs
+}
+
+// currentScrollOffset returns a pointer to the appropriate scroll offset based on panel
+func (m *Model) currentScrollOffset() *int {
+	if m.jobsPanel == 0 {
+		return &m.activeJobsScrollOffset
+	}
+	return &m.queuedJobsScrollOffset
 }
 
 // calculateVisibleJobsHeight calculates how many job items can fit in the Jobs view
@@ -2587,11 +2614,5 @@ func stageColor(stage types.ProcessingStage) lipgloss.Color {
 func (m *Model) addLog(level, message string) {
 	timestamp := time.Now().Format("15:04:05")
 	logEntry := fmt.Sprintf("[%s] %s: %s", timestamp, level, message)
-
-	m.logs = append(m.logs, logEntry)
-
-	// Keep only the last maxLogs entries
-	if len(m.logs) > m.maxLogs {
-		m.logs = m.logs[len(m.logs)-m.maxLogs:]
-	}
+	m.logBuffer.Add(logEntry)
 }

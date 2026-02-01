@@ -110,6 +110,11 @@ CREATE INDEX IF NOT EXISTS idx_jobs_priority ON transcode_jobs(priority DESC, cr
 
 CREATE INDEX IF NOT EXISTS idx_log_job ON processing_log(job_id);
 CREATE INDEX IF NOT EXISTS idx_log_type ON processing_log(event_type);
+
+-- Additional indexes for query performance
+CREATE INDEX IF NOT EXISTS idx_media_files_path ON media_files(file_path);
+CREATE INDEX IF NOT EXISTS idx_jobs_media_file ON transcode_jobs(media_file_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_priority ON transcode_jobs(status, priority DESC, created_at ASC);
 `
 
 // Schema version for migration tracking
