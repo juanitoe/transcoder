@@ -3,58 +3,57 @@
 [![CI](https://github.com/juanitoe/transcoder/actions/workflows/ci.yml/badge.svg)](https://github.com/juanitoe/transcoder/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/juanitoe/transcoder)](https://github.com/juanitoe/transcoder/releases/latest)
 
-Terminal UI for batch transcoding video files to HEVC. Scans remote libraries via SSH, transcodes locally with hardware acceleration, uploads back.
+Terminal UI for batch transcoding video files to HEVC with hardware acceleration.
+
+Two modes:
+- **Remote**: Scan files on NAS/server via SSH, download, transcode locally, upload back
+- **Local**: Transcode files directly on the local machine
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              LOCAL MACHINE                                  │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                           TUI (Bubble Tea)                            │  │
-│  │          Dashboard │ Jobs │ Settings │ Scanner │ Logs                 │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-│                                    │                                        │
-│          ┌─────────────────────────┼─────────────────────────┐              │
-│          ▼                         ▼                         ▼              │
-│  ┌──────────────┐        ┌──────────────────┐       ┌──────────────┐        │
-│  │   Scanner    │        │   Worker Pool    │       │   Database   │        │
-│  │              │        │   (N workers)    │       │   (SQLite)   │        │
-│  └──────┬───────┘        └────────┬─────────┘       └──────────────┘        │
-│         │                         │                                         │
-│         │                ┌────────┴────────┐                                │
-│         │                ▼                 ▼                                │
-│         │          ┌──────────┐    ┌──────────────┐                         │
-│         │          │ Encoder  │    │   Checksum   │                         │
-│         │          │ (FFmpeg) │    │ Verification │                         │
-│         │          └──────────┘    └──────────────┘                         │
-│         │                                                                   │
-└─────────┼───────────────────────────────────────────────────────────────────┘
-          │              ▲                          │
-          │ SSH/SFTP     │ ffprobe                  │ SFTP
-          │ scan         │ metadata                 │ download/upload
-          ▼              │                          ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            REMOTE SERVER (NAS)                              │
-│                                                                             │
-│    /movies                    /tv-shows                                     │
-│    ├── Movie1.mkv (H.264)     ├── Show1/                                    │
-│    ├── Movie2.mp4 (HEVC) ✓    │   ├── S01E01.mkv                            │
-│    └── Movie3.avi (H.264)     │   └── S01E02.mkv                            │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+REMOTE MODE                                 LOCAL MODE
+
+┌──────────────────────┐                    ┌──────────────────────┐
+│    LOCAL MACHINE     │                    │    LOCAL MACHINE     │
+│                      │                    │                      │
+│  ┌────────────────┐  │                    │  ┌────────────────┐  │
+│  │      TUI       │  │                    │  │      TUI       │  │
+│  └───────┬────────┘  │                    │  └───────┬────────┘  │
+│          │           │                    │          │           │
+│  ┌───────▼────────┐  │                    │  ┌───────▼────────┐  │
+│  │  Worker Pool   │  │                    │  │  Worker Pool   │  │
+│  │                │  │                    │  │                │  │
+│  │  ┌──────────┐  │  │                    │  │  ┌──────────┐  │  │
+│  │  │  FFmpeg  │  │  │                    │  │  │  FFmpeg  │  │  │
+│  │  └──────────┘  │  │                    │  │  └──────────┘  │  │
+│  └───────┬────────┘  │                    │  └───────┬────────┘  │
+│          │           │                    │          │           │
+│      SSH/SFTP        │                    │     direct I/O       │
+│          │           │                    │          │           │
+└──────────┼───────────┘                    │  ┌───────▼────────┐  │
+           │                                │  │  /movies       │  │
+           ▼                                │  │  /tv-shows     │  │
+┌──────────────────────┐                    │  └────────────────┘  │
+│   REMOTE SERVER      │                    │                      │
+│                      │                    └──────────────────────┘
+│  /movies             │
+│  /tv-shows           │
+│                      │
+└──────────────────────┘
 
 Job Pipeline:
-┌─────────┐    ┌───────────┐    ┌───────────┐    ┌──────────┐    ┌──────────┐
-│ queued  │───▶│ download  │───▶│ transcode │───▶│ validate │───▶│  upload  │───▶ completed
-└─────────┘    └───────────┘    └───────────┘    └──────────┘    └──────────┘
-                    │                 │                               │
-                    ▼                 ▼                               ▼
-                 failed            failed                          failed
+┌────────┐   ┌──────────┐   ┌───────────┐   ┌──────────┐   ┌────────┐
+│ queued │──▶│ download │──▶│ transcode │──▶│ validate │──▶│ upload │──▶ done
+└────────┘   └──────────┘   └───────────┘   └──────────┘   └────────┘
+                  │               │               │             │
+               (remote)       (always)        (always)      (remote)
+                 only                                          only
 ```
 
 ## Features
 
-- Parallel remote scanning with SSH connection pooling
+- **Two modes**: Remote (SSH/SFTP) or local file processing
 - Hardware encoding: VideoToolbox (macOS), VAAPI (Linux), libx265 (software)
+- Parallel scanning with SSH connection pooling (remote mode)
 - Worker pool with runtime scaling
 - Skip files that would grow larger after transcoding
 - Checksum verification (xxHash64)
@@ -92,13 +91,19 @@ go build -o transcoder ./cmd/transcoder
 ## Requirements
 
 - FFmpeg with HEVC encoder (`hevc_videotoolbox`, `hevc_vaapi`, or `libx265`)
-- SSH access to media server (for remote mode)
+- SSH access to media server (remote mode only)
 
 ## Configuration
 
 Create `~/transcoder/config.yaml`:
 
+### Remote Mode (default)
+
+Transcode files from a remote server:
+
 ```yaml
+mode: "remote"
+
 remote:
   host: "media-server"
   port: 22
@@ -108,9 +113,6 @@ remote:
     - "/path/to/movies"
     - "/path/to/tv-shows"
   ssh_pool_size: 4
-
-database:
-  path: "~/transcoder/transcoder.db"
 
 workers:
   max_workers: 2
@@ -124,6 +126,42 @@ encoder:
 files:
   extensions: [mkv, mp4, avi]
   keep_original: false
+
+database:
+  path: "~/transcoder/transcoder.db"
+
+logging:
+  level: "info"
+  file: "~/transcoder/transcoder.log"
+```
+
+### Local Mode
+
+Transcode files on the local machine:
+
+```yaml
+mode: "local"
+
+local:
+  media_paths:
+    - "/path/to/movies"
+    - "/path/to/tv-shows"
+
+workers:
+  max_workers: 2
+  work_dir: "~/transcoder_temp"
+
+encoder:
+  codec: "hevc_videotoolbox"  # or hevc_vaapi, libx265
+  quality: 75
+  preset: "medium"
+
+files:
+  extensions: [mkv, mp4, avi]
+  keep_original: false
+
+database:
+  path: "~/transcoder/transcoder.db"
 
 logging:
   level: "info"
@@ -151,12 +189,20 @@ logging:
 
 ## How it works
 
-1. Scan remote library via SSH, get file metadata with ffprobe
-2. Queue non-HEVC files for transcoding
+### Remote Mode
+1. Scan remote library via SSH, get metadata with ffprobe
+2. Queue non-HEVC files
 3. Download file via SFTP
 4. Transcode with FFmpeg
 5. Verify duration matches
 6. Upload back, replace original
+
+### Local Mode
+1. Scan local directories, get metadata with ffprobe
+2. Queue non-HEVC files
+3. Transcode in place (to temp file)
+4. Verify duration matches
+5. Replace original
 
 ## License
 
