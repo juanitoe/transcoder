@@ -1,6 +1,7 @@
 # Video Transcoder TUI
 
 [![CI](https://github.com/juanitoe/transcoder/actions/workflows/ci.yml/badge.svg)](https://github.com/juanitoe/transcoder/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/juanitoe/transcoder)](https://github.com/juanitoe/transcoder/releases/latest)
 
 A production-ready video transcoding system with an interactive Terminal UI for managing H.264 → HEVC conversions using Apple's VideoToolbox hardware acceleration.
 
@@ -19,7 +20,7 @@ A production-ready video transcoding system with an interactive Terminal UI for 
 - **Job Search** - Full-text search with bulk pause/cancel actions
 
 ### Performance
-- **Hardware Acceleration** - VideoToolbox HEVC encoding on Apple Silicon
+- **Hardware Acceleration** - VideoToolbox (macOS), VAAPI (Linux), or libx265 (software fallback)
 - **Concurrent Processing** - Worker pool with dynamic scaling (0-N workers)
 - **Early Size Detection** - Skip transcoding if output would be larger than original
 - **Pre-Transcode Estimation** - Estimate output size before full encode to avoid wasted effort
@@ -58,15 +59,41 @@ A production-ready video transcoding system with an interactive Terminal UI for 
 
 ### Requirements
 
-- Go 1.21+
-- FFmpeg with VideoToolbox support (macOS)
-- SSH access to media server
+- FFmpeg with hardware encoder support:
+  - macOS: VideoToolbox (`hevc_videotoolbox`)
+  - Linux: VAAPI (`hevc_vaapi`) or software (`libx265`)
+- SSH access to media server (for remote mode)
+- Go 1.21+ (only if building from source)
 
 ### Installation
 
+#### Pre-built Binaries (Recommended)
+
+Download the latest release for your platform:
+
 ```bash
-git clone https://github.com/yourusername/transcoder-go.git
-cd transcoder-go
+# Linux (x86_64)
+curl -L https://github.com/juanitoe/transcoder/releases/latest/download/transcoder-linux-amd64 -o transcoder
+chmod +x transcoder
+
+# Linux (ARM64)
+curl -L https://github.com/juanitoe/transcoder/releases/latest/download/transcoder-linux-arm64 -o transcoder
+chmod +x transcoder
+
+# macOS (Apple Silicon)
+curl -L https://github.com/juanitoe/transcoder/releases/latest/download/transcoder-darwin-arm64 -o transcoder
+chmod +x transcoder
+
+# macOS (Intel)
+curl -L https://github.com/juanitoe/transcoder/releases/latest/download/transcoder-darwin-amd64 -o transcoder
+chmod +x transcoder
+```
+
+#### Build from Source
+
+```bash
+git clone https://github.com/juanitoe/transcoder.git
+cd transcoder
 go build -o transcoder ./cmd/transcoder
 ```
 
@@ -97,7 +124,7 @@ workers:
   skip_checksum: false      # Skip verification for speed
 
 encoder:
-  codec: "hevc_videotoolbox"
+  codec: "hevc_videotoolbox"  # or hevc_vaapi (Linux), libx265 (software)
   quality: 75               # 0-100, higher is better
   preset: "medium"          # ultrafast to veryslow
   min_expected_savings: 10  # Skip if less than 10% savings expected
@@ -127,6 +154,9 @@ logging:
 ### Usage
 
 ```bash
+# Check version
+./transcoder --version
+
 # Start the TUI
 ./transcoder
 
@@ -175,7 +205,7 @@ See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation including
 ### Scanning Strategy
 - **Parallel Processing**: Worker pool with configurable SSH connections (1-16, default 4)
 - **SSH Connection Pooling**: Reusable connections eliminate ~200ms overhead per file
-- **Batch Database Operations**: Inserts/updates batched in groups of 20 (80-90% overhead reduction)
+- **Batch Database Operations**: Inserts/updates batched in groups of 100 (80-90% overhead reduction)
 - **Automatic Scheduling**: Periodic scans at configurable intervals with optional auto-queue
 - **First scan**: Fast metadata-only (checksums deferred to background)
 - **Subsequent scans**: Lazy checksum backfill for unchanged files
