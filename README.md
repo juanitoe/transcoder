@@ -5,6 +5,52 @@
 
 Terminal UI for batch transcoding video files to HEVC. Scans remote libraries via SSH, transcodes locally with hardware acceleration, uploads back.
 
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              LOCAL MACHINE                                  │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                           TUI (Bubble Tea)                            │  │
+│  │          Dashboard │ Jobs │ Settings │ Scanner │ Logs                 │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                        │
+│          ┌─────────────────────────┼─────────────────────────┐              │
+│          ▼                         ▼                         ▼              │
+│  ┌──────────────┐        ┌──────────────────┐       ┌──────────────┐        │
+│  │   Scanner    │        │   Worker Pool    │       │   Database   │        │
+│  │              │        │   (N workers)    │       │   (SQLite)   │        │
+│  └──────┬───────┘        └────────┬─────────┘       └──────────────┘        │
+│         │                         │                                         │
+│         │                ┌────────┴────────┐                                │
+│         │                ▼                 ▼                                │
+│         │          ┌──────────┐    ┌──────────────┐                         │
+│         │          │ Encoder  │    │   Checksum   │                         │
+│         │          │ (FFmpeg) │    │ Verification │                         │
+│         │          └──────────┘    └──────────────┘                         │
+│         │                                                                   │
+└─────────┼───────────────────────────────────────────────────────────────────┘
+          │              ▲                          │
+          │ SSH/SFTP     │ ffprobe                  │ SFTP
+          │ scan         │ metadata                 │ download/upload
+          ▼              │                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            REMOTE SERVER (NAS)                              │
+│                                                                             │
+│    /movies                    /tv-shows                                     │
+│    ├── Movie1.mkv (H.264)     ├── Show1/                                    │
+│    ├── Movie2.mp4 (HEVC) ✓    │   ├── S01E01.mkv                            │
+│    └── Movie3.avi (H.264)     │   └── S01E02.mkv                            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Job Pipeline:
+┌─────────┐    ┌───────────┐    ┌───────────┐    ┌──────────┐    ┌──────────┐
+│ queued  │───▶│ download  │───▶│ transcode │───▶│ validate │───▶│  upload  │───▶ completed
+└─────────┘    └───────────┘    └───────────┘    └──────────┘    └──────────┘
+                    │                 │                               │
+                    ▼                 ▼                               ▼
+                 failed            failed                          failed
+```
+
 ## Features
 
 - Parallel remote scanning with SSH connection pooling
