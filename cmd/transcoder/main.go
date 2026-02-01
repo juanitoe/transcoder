@@ -113,11 +113,81 @@ func runTUI() error {
 	return nil
 }
 
+func validateConfig(configPath string) error {
+	if configPath == "" {
+		configPath = os.ExpandEnv("$HOME/transcoder/config.yaml")
+	}
+
+	// Check if config file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return fmt.Errorf("config file not found: %s", configPath)
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("config error: %w", err)
+	}
+
+	// Print config summary
+	fmt.Printf("Config: %s\n\n", configPath)
+	fmt.Printf("Mode:       %s\n", cfg.Mode)
+
+	if cfg.IsLocalMode() {
+		fmt.Printf("Media paths:\n")
+		for _, p := range cfg.Local.MediaPaths {
+			fmt.Printf("  - %s\n", p)
+		}
+	} else {
+		fmt.Printf("Remote:     %s@%s:%d\n", cfg.Remote.User, cfg.Remote.Host, cfg.Remote.Port)
+		fmt.Printf("SSH key:    %s\n", cfg.Remote.SSHKey)
+		fmt.Printf("Media paths:\n")
+		for _, p := range cfg.Remote.MediaPaths {
+			fmt.Printf("  - %s\n", p)
+		}
+		fmt.Printf("SSH pool:   %d connections\n", cfg.Remote.SSHPoolSize)
+	}
+
+	fmt.Printf("\nEncoder:    %s (quality: %d, preset: %s)\n", cfg.Encoder.Codec, cfg.Encoder.Quality, cfg.Encoder.Preset)
+	fmt.Printf("Workers:    %d\n", cfg.Workers.MaxWorkers)
+	fmt.Printf("Work dir:   %s\n", cfg.Workers.WorkDir)
+	fmt.Printf("Database:   %s\n", cfg.Database.Path)
+	fmt.Printf("Log file:   %s\n", cfg.Logging.File)
+	fmt.Printf("Log level:  %s\n", cfg.Logging.Level)
+	fmt.Printf("Extensions: %v\n", cfg.Files.Extensions)
+
+	fmt.Printf("\nConfig is valid.\n")
+	return nil
+}
+
 func main() {
-	// Handle --version flag before anything else
-	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Printf("transcoder %s\n", version.GetVersion())
-		return
+	// Handle flags before anything else
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-v":
+			fmt.Printf("transcoder %s\n", version.GetVersion())
+			return
+		case "--validate-config", "--check-config":
+			var cfgPath string
+			if len(os.Args) > 2 {
+				cfgPath = os.Args[2]
+			}
+			if err := validateConfig(cfgPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "--help", "-h":
+			fmt.Printf("transcoder %s\n\n", version.GetVersion())
+			fmt.Println("Usage: transcoder [options]")
+			fmt.Println()
+			fmt.Println("Options:")
+			fmt.Println("  --version, -v              Show version")
+			fmt.Println("  --validate-config [path]   Validate config file and show summary")
+			fmt.Println("  --help, -h                 Show this help")
+			fmt.Println()
+			fmt.Println("Default config: ~/transcoder/config.yaml")
+			return
+		}
 	}
 
 	if err := runTUI(); err != nil {

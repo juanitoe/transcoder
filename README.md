@@ -171,8 +171,10 @@ logging:
 ## Usage
 
 ```bash
-./transcoder --version
-./transcoder
+./transcoder --version          # show version
+./transcoder --validate-config  # check config and show summary
+./transcoder --help             # show help
+./transcoder                    # start TUI
 ```
 
 **Shortcuts:**
