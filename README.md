@@ -175,6 +175,48 @@ logging:
 ./transcoder --validate-config  # check config and show summary
 ./transcoder --help             # show help
 ./transcoder                    # start TUI
+./transcoder --daemon           # run in daemon mode (no TUI)
+```
+
+### Daemon Mode
+
+Run without TUI for unattended server operation:
+
+```bash
+./transcoder --daemon
+```
+
+The daemon:
+- Runs an initial scan on startup
+- Auto-queues files for transcoding (if configured)
+- Processes jobs with the worker pool
+- Optionally re-scans at intervals
+- Handles SIGTERM/SIGINT for graceful shutdown
+
+Configure daemon behavior in `config.yaml`:
+
+```yaml
+scanner:
+  auto_scan_interval_hours: 6    # Re-scan every 6 hours (0 = one scan only)
+  auto_queue_after_scan: true    # Queue discovered files automatically
+```
+
+Example: run as a systemd service:
+
+```ini
+[Unit]
+Description=Video Transcoder Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+ExecStart=/path/to/transcoder --daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 **Shortcuts:**

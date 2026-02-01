@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"transcoder/internal/config"
@@ -17,6 +18,132 @@ import (
 	"transcoder/internal/tui"
 	"transcoder/internal/version"
 )
+
+func runDaemon() error {
+	// Load configuration
+	configPath := os.ExpandEnv("$HOME/transcoder/config.yaml")
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Initialize application logging
+	if err := logging.Init(cfg.Logging.File, cfg.Logging.Level); err != nil {
+		return fmt.Errorf("failed to initialize logging: %w", err)
+	}
+	defer logging.Close()
+
+	logging.Info("Daemon mode started")
+	logging.Info("Configuration loaded from %s", configPath)
+
+	// Open database
+	dbPath := os.ExpandEnv(cfg.Database.Path)
+	db, err := database.New(dbPath)
+	if err != nil {
+		logging.Error("Failed to open database: %v", err)
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	logging.Info("Database opened: %s", dbPath)
+
+	// Recover jobs from previous run (requeue orphaned jobs)
+	recoveredCount, err := db.RecoverJobs()
+	if err != nil {
+		logging.Warn("Failed to recover jobs: %v", err)
+	} else if recoveredCount > 0 {
+		logging.Info("Recovered %d orphaned jobs from previous run", recoveredCount)
+	}
+
+	// Create scanner
+	scan, err := scanner.New(cfg, db)
+	if err != nil {
+		return fmt.Errorf("failed to create scanner: %w", err)
+	}
+
+	// Create worker pool
+	workerPool := transcode.NewWorkerPool(cfg, db, scan)
+
+	// Start worker pool
+	workerPool.Start()
+	logging.Info("Worker pool started with %d workers", cfg.Workers.MaxWorkers)
+
+	// Signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Helper function to run a scan and optionally queue jobs
+	runScan := func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		logging.Info("Starting scan...")
+
+		// Connect scanner if needed (for remote mode)
+		if err := scan.Connect(ctx); err != nil {
+			logging.Error("Failed to connect scanner: %v", err)
+			return
+		}
+
+		// Run the scan
+		err := scan.Scan(ctx, func(progress scanner.ScanProgress) {
+			// Log progress periodically
+			if progress.FilesScanned%100 == 0 {
+				logging.Info("Scan progress: %d files scanned, %d new, %d updated, %d errors",
+					progress.FilesScanned, progress.FilesAdded, progress.FilesUpdated, progress.ErrorCount)
+			}
+		})
+		if err != nil {
+			logging.Error("Scan failed: %v", err)
+			return
+		}
+
+		logging.Info("Scan completed")
+
+		// Auto-queue jobs if configured
+		if cfg.Scanner.AutoQueueAfterScan {
+			count, err := db.QueueJobsForTranscoding(0)
+			if err != nil {
+				logging.Error("Failed to queue jobs: %v", err)
+			} else if count > 0 {
+				logging.Info("Queued %d jobs for transcoding", count)
+			}
+		}
+	}
+
+	// Run initial scan
+	runScan()
+
+	// Setup auto-scan timer if configured
+	var ticker *time.Ticker
+	var tickerCh <-chan time.Time
+
+	if cfg.Scanner.AutoScanIntervalHours > 0 {
+		interval := time.Duration(cfg.Scanner.AutoScanIntervalHours) * time.Hour
+		ticker = time.NewTicker(interval)
+		tickerCh = ticker.C
+		logging.Info("Auto-scan enabled: every %d hours", cfg.Scanner.AutoScanIntervalHours)
+	} else {
+		logging.Info("Auto-scan disabled (interval = 0)")
+	}
+
+	// Event loop
+	logging.Info("Daemon running, waiting for signals...")
+	for {
+		select {
+		case sig := <-sigChan:
+			logging.Info("Received signal: %v, shutting down...", sig)
+			if ticker != nil {
+				ticker.Stop()
+			}
+			workerPool.Stop()
+			logging.Info("Daemon stopped")
+			return nil
+		case <-tickerCh:
+			logging.Info("Auto-scan timer triggered")
+			runScan()
+		}
+	}
+}
 
 func runTUI() error {
 	// Setup signal handling for graceful shutdown
@@ -166,6 +293,11 @@ func main() {
 		case "--version", "-v":
 			fmt.Printf("transcoder %s\n", version.GetVersion())
 			return
+		case "--daemon", "-d":
+			if err := runDaemon(); err != nil {
+				log.Fatal(err)
+			}
+			return
 		case "--validate-config", "--check-config":
 			var cfgPath string
 			if len(os.Args) > 2 {
@@ -181,6 +313,7 @@ func main() {
 			fmt.Println("Usage: transcoder [options]")
 			fmt.Println()
 			fmt.Println("Options:")
+			fmt.Println("  --daemon, -d               Run in daemon mode (no TUI)")
 			fmt.Println("  --version, -v              Show version")
 			fmt.Println("  --validate-config [path]   Validate config file and show summary")
 			fmt.Println("  --help, -h                 Show this help")
