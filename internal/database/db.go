@@ -6,11 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver (no CGO required)
 
 	"transcoder/internal/types"
+)
+
+// SQLite busy retry configuration
+const (
+	maxRetries     = 5
+	initialBackoff = 100 * time.Millisecond
+	maxBackoff     = 2 * time.Second
 )
 
 // DB represents the database connection
@@ -41,10 +49,17 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	conn, err := sql.Open("sqlite", dbPath)
+	// Add busy_timeout to connection string for better concurrency handling
+	// _busy_timeout=30000 means SQLite will wait up to 30 seconds for locks to clear
+	connString := dbPath + "?_busy_timeout=30000"
+	conn, err := sql.Open("sqlite", connString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Limit connection pool to reduce contention
+	conn.SetMaxOpenConns(1) // SQLite works best with single writer
+	conn.SetMaxIdleConns(1)
 
 	// Try to enable WAL mode for better concurrency
 	// If it fails, continue with default journal mode (DELETE)
@@ -135,6 +150,43 @@ func (db *DB) Close() error {
 		_ = db.getByPathStmt.Close()
 	}
 	return db.conn.Close()
+}
+
+// isBusyError checks if the error is a SQLite busy/locked error
+func isBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "SQLITE_BUSY") ||
+		strings.Contains(errStr, "SQLITE_LOCKED") ||
+		strings.Contains(errStr, "database is locked")
+}
+
+// retryOnBusy retries a database operation with exponential backoff on SQLITE_BUSY
+func retryOnBusy(operation func() error) error {
+	var lastErr error
+	backoff := initialBackoff
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		lastErr = operation()
+		if lastErr == nil {
+			return nil
+		}
+
+		if !isBusyError(lastErr) {
+			return lastErr // Non-busy error, don't retry
+		}
+
+		// Wait with exponential backoff before retrying
+		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
+	return fmt.Errorf("operation failed after %d retries: %w", maxRetries, lastErr)
 }
 
 // AddMediaFile adds a discovered media file to the database
@@ -408,247 +460,165 @@ func (db *DB) CreateJob(mediaFileID int64, priority int) (int64, error) {
 	return result.LastInsertId()
 }
 
-// ClaimNextJob atomically claims the next job for a worker
+// ClaimNextJob atomically claims the next job for a worker (with retry on busy)
 // Priority order:
 // 1. Orphaned jobs (downloading/transcoding/uploading with no worker) - recovered from restart
 // 2. New queued jobs
 func (db *DB) ClaimNextJob(workerID string) (*types.TranscodeJob, error) {
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	var job *types.TranscodeJob
 
-	var jobID int64
+	err := retryOnBusy(func() error {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 
-	// First, try to claim orphaned jobs (highest priority - these are recovered jobs)
-	row := tx.QueryRow(`
-		SELECT id FROM transcode_jobs
-		WHERE status IN ('downloading', 'transcoding', 'uploading')
-		  AND (worker_id = '' OR worker_id IS NULL)
-		ORDER BY
-		  CASE status
-		    WHEN 'uploading' THEN 1
-		    WHEN 'transcoding' THEN 2
-		    WHEN 'downloading' THEN 3
-		  END,
-		  priority DESC,
-		  created_at ASC
-		LIMIT 1
-	`)
+		var jobID int64
 
-	err = row.Scan(&jobID)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("failed to find orphaned job: %w", err)
-	}
-
-	// If no orphaned jobs, try to find new queued jobs
-	if err == sql.ErrNoRows {
-		row = tx.QueryRow(`
+		// First, try to claim orphaned jobs (highest priority - these are recovered jobs)
+		row := tx.QueryRow(`
 			SELECT id FROM transcode_jobs
-			WHERE status = 'queued' AND (worker_id = '' OR worker_id IS NULL)
-			ORDER BY priority DESC, created_at ASC
+			WHERE status IN ('downloading', 'transcoding', 'uploading')
+			  AND (worker_id = '' OR worker_id IS NULL)
+			ORDER BY
+			  CASE status
+			    WHEN 'uploading' THEN 1
+			    WHEN 'transcoding' THEN 2
+			    WHEN 'downloading' THEN 3
+			  END,
+			  priority DESC,
+			  created_at ASC
 			LIMIT 1
 		`)
 
-		if err := row.Scan(&jobID); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, nil // No jobs available
-			}
-			return nil, fmt.Errorf("failed to find queued job: %w", err)
+		err = row.Scan(&jobID)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("failed to find orphaned job: %w", err)
 		}
 
-		// For new queued jobs, set status to downloading and timestamp
-		_, err = tx.Exec(`
-			UPDATE transcode_jobs
-			SET status = 'downloading',
-			    worker_id = ?,
-			    transcode_started_at = CURRENT_TIMESTAMP,
-			    updated_at = CURRENT_TIMESTAMP
-			WHERE id = ?
-		`, workerID, jobID)
-	} else {
-		// For orphaned jobs, just assign worker (keep existing status and progress)
-		_, err = tx.Exec(`
-			UPDATE transcode_jobs
-			SET worker_id = ?,
-			    updated_at = CURRENT_TIMESTAMP
-			WHERE id = ?
-		`, workerID, jobID)
-	}
+		// If no orphaned jobs, try to find new queued jobs
+		if err == sql.ErrNoRows {
+			row = tx.QueryRow(`
+				SELECT id FROM transcode_jobs
+				WHERE status = 'queued' AND (worker_id = '' OR worker_id IS NULL)
+				ORDER BY priority DESC, created_at ASC
+				LIMIT 1
+			`)
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to claim job: %w", err)
-	}
+			if err := row.Scan(&jobID); err != nil {
+				if err == sql.ErrNoRows {
+					job = nil // No jobs available
+					return nil
+				}
+				return fmt.Errorf("failed to find queued job: %w", err)
+			}
 
-	// Get the full job details
-	jobRow := tx.QueryRow("SELECT * FROM transcode_jobs WHERE id = ?", jobID)
-	job, err := db.scanTranscodeJob(jobRow)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get job details: %w", err)
-	}
+			// For new queued jobs, set status to downloading and timestamp
+			_, err = tx.Exec(`
+				UPDATE transcode_jobs
+				SET status = 'downloading',
+				    worker_id = ?,
+				    transcode_started_at = CURRENT_TIMESTAMP,
+				    updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, workerID, jobID)
+		} else {
+			// For orphaned jobs, just assign worker (keep existing status and progress)
+			_, err = tx.Exec(`
+				UPDATE transcode_jobs
+				SET worker_id = ?,
+				    updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, workerID, jobID)
+		}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
-	}
+		if err != nil {
+			return fmt.Errorf("failed to claim job: %w", err)
+		}
 
-	return job, nil
+		// Get the full job details
+		jobRow := tx.QueryRow("SELECT * FROM transcode_jobs WHERE id = ?", jobID)
+		job, err = db.scanTranscodeJob(jobRow)
+		if err != nil {
+			return fmt.Errorf("failed to get job details: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+
+		return nil
+	})
+
+	return job, err
 }
 
-// UpdateJobStatus updates a job's status and progress
+// UpdateJobStatus updates a job's status and progress (with retry on busy)
 func (db *DB) UpdateJobStatus(jobID int64, status types.JobStatus, stage types.ProcessingStage, progress float64) error {
-	_, err := db.conn.Exec(`
-		UPDATE transcode_jobs
-		SET status = ?, stage = ?, progress = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, string(status), string(stage), progress, jobID)
-
-	return err
+	return retryOnBusy(func() error {
+		_, err := db.conn.Exec(`
+			UPDATE transcode_jobs
+			SET status = ?, stage = ?, progress = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, string(status), string(stage), progress, jobID)
+		return err
+	})
 }
 
-// UpdateJobProgress updates the progress, stage, and fps fields
+// UpdateJobProgress updates the progress, stage, and fps fields (with retry on busy)
 func (db *DB) UpdateJobProgress(jobID int64, progress float64, fps float64, stage string) error {
-	_, err := db.conn.Exec(`
-		UPDATE transcode_jobs
-		SET progress = ?, encoding_fps = ?, stage = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, progress, fps, stage, jobID)
-
-	return err
+	return retryOnBusy(func() error {
+		_, err := db.conn.Exec(`
+			UPDATE transcode_jobs
+			SET progress = ?, encoding_fps = ?, stage = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, progress, fps, stage, jobID)
+		return err
+	})
 }
 
-// UpdateJobFileSize updates the current transcoded file size
+// UpdateJobFileSize updates the current transcoded file size (with retry on busy)
 func (db *DB) UpdateJobFileSize(jobID int64, fileSize int64) error {
-	_, err := db.conn.Exec(`
-		UPDATE transcode_jobs
-		SET transcoded_file_size_bytes = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, fileSize, jobID)
-
-	return err
+	return retryOnBusy(func() error {
+		_, err := db.conn.Exec(`
+			UPDATE transcode_jobs
+			SET transcoded_file_size_bytes = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, fileSize, jobID)
+		return err
+	})
 }
 
-// CompleteJob marks a job as completed
+// CompleteJob marks a job as completed (with retry on busy)
 func (db *DB) CompleteJob(jobID int64, outputSize int64, encodingTime int, fps float64) error {
-	// Start a transaction to update both tables atomically
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return retryOnBusy(func() error {
+		// Start a transaction to update both tables atomically
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 
-	// Update the job status
-	_, err = tx.Exec(`
-		UPDATE transcode_jobs
-		SET status = 'completed',
-		    progress = 100.0,
-		    transcode_completed_at = CURRENT_TIMESTAMP,
-		    transcoded_file_size_bytes = ?,
-		    encoding_time_seconds = ?,
-		    encoding_fps = ?,
-		    verification_passed = 1,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, outputSize, encodingTime, fps, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update job: %w", err)
-	}
-
-	// Mark the media file as no longer needing transcoding
-	_, err = tx.Exec(`
-		UPDATE media_files
-		SET should_transcode = 0,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
-	`, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update media file: %w", err)
-	}
-
-	return tx.Commit()
-}
-
-// CompleteJobWithChecksums marks a job as completed with checksum information
-func (db *DB) CompleteJobWithChecksums(jobID int64, outputSize int64, encodingTime int, fps float64, inputChecksum, outputChecksum, uploadedChecksum string) error {
-	// Start a transaction to update both tables atomically
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Update the job status with checksums
-	_, err = tx.Exec(`
-		UPDATE transcode_jobs
-		SET status = 'completed',
-		    progress = 100.0,
-		    transcode_completed_at = CURRENT_TIMESTAMP,
-		    transcoded_file_size_bytes = ?,
-		    encoding_time_seconds = ?,
-		    encoding_fps = ?,
-		    verification_passed = 1,
-		    local_input_checksum = ?,
-		    local_output_checksum = ?,
-		    uploaded_checksum = ?,
-		    checksum_verified = 1,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, outputSize, encodingTime, fps, inputChecksum, outputChecksum, uploadedChecksum, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update job: %w", err)
-	}
-
-	// Mark the media file as no longer needing transcoding
-	_, err = tx.Exec(`
-		UPDATE media_files
-		SET should_transcode = 0,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
-	`, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update media file: %w", err)
-	}
-
-	return tx.Commit()
-}
-
-// FailJob marks a job as failed. If retries remain, requeues the job for retry.
-// After 3 failures, marks as permanently failed and sets should_transcode=0.
-func (db *DB) FailJob(jobID int64, errorMsg string) error {
-	const maxRetries = 3
-
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Get current retry count
-	var retryCount int
-	err = tx.QueryRow(`SELECT retry_count FROM transcode_jobs WHERE id = ?`, jobID).Scan(&retryCount)
-	if err != nil {
-		return fmt.Errorf("failed to get retry count: %w", err)
-	}
-
-	newRetryCount := retryCount + 1
-
-	if newRetryCount >= maxRetries {
-		// Max retries reached - mark as permanently failed
+		// Update the job status
 		_, err = tx.Exec(`
 			UPDATE transcode_jobs
-			SET status = 'failed',
-			    error_message = ?,
-			    retry_count = ?,
-			    last_retry_at = CURRENT_TIMESTAMP,
+			SET status = 'completed',
+			    progress = 100.0,
+			    transcode_completed_at = CURRENT_TIMESTAMP,
+			    transcoded_file_size_bytes = ?,
+			    encoding_time_seconds = ?,
+			    encoding_fps = ?,
+			    verification_passed = 1,
 			    worker_id = '',
 			    updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?
-		`, errorMsg, newRetryCount, jobID)
+		`, outputSize, encodingTime, fps, jobID)
 		if err != nil {
 			return fmt.Errorf("failed to update job: %w", err)
 		}
 
-		// Permanently disable transcoding for this file
+		// Mark the media file as no longer needing transcoding
 		_, err = tx.Exec(`
 			UPDATE media_files
 			SET should_transcode = 0,
@@ -656,154 +626,263 @@ func (db *DB) FailJob(jobID int64, errorMsg string) error {
 			WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
 		`, jobID)
 		if err != nil {
-			return fmt.Errorf("failed to disable transcoding: %w", err)
+			return fmt.Errorf("failed to update media file: %w", err)
 		}
-	} else {
-		// Retries remaining - requeue the job
+
+		return tx.Commit()
+	})
+}
+
+// CompleteJobWithChecksums marks a job as completed with checksum information (with retry on busy)
+func (db *DB) CompleteJobWithChecksums(jobID int64, outputSize int64, encodingTime int, fps float64, inputChecksum, outputChecksum, uploadedChecksum string) error {
+	return retryOnBusy(func() error {
+		// Start a transaction to update both tables atomically
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		// Update the job status with checksums
 		_, err = tx.Exec(`
 			UPDATE transcode_jobs
-			SET status = 'queued',
-			    error_message = ?,
-			    retry_count = ?,
-			    last_retry_at = CURRENT_TIMESTAMP,
+			SET status = 'completed',
+			    progress = 100.0,
+			    transcode_completed_at = CURRENT_TIMESTAMP,
+			    transcoded_file_size_bytes = ?,
+			    encoding_time_seconds = ?,
+			    encoding_fps = ?,
+			    verification_passed = 1,
+			    local_input_checksum = ?,
+			    local_output_checksum = ?,
+			    uploaded_checksum = ?,
+			    checksum_verified = 1,
 			    worker_id = '',
 			    updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?
-		`, errorMsg, newRetryCount, jobID)
+		`, outputSize, encodingTime, fps, inputChecksum, outputChecksum, uploadedChecksum, jobID)
 		if err != nil {
-			return fmt.Errorf("failed to requeue job: %w", err)
+			return fmt.Errorf("failed to update job: %w", err)
 		}
-	}
 
-	return tx.Commit()
+		// Mark the media file as no longer needing transcoding
+		_, err = tx.Exec(`
+			UPDATE media_files
+			SET should_transcode = 0,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+		`, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to update media file: %w", err)
+		}
+
+		return tx.Commit()
+	})
 }
 
-// SkipJob marks a job as skipped and sets should_transcode=0 to prevent re-adding
+// FailJob marks a job as failed. If retries remain, requeues the job for retry.
+// After 3 failures, marks as permanently failed and sets should_transcode=0.
+// (with retry on busy)
+func (db *DB) FailJob(jobID int64, errorMsg string) error {
+	const maxJobRetries = 3
+
+	return retryOnBusy(func() error {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		// Get current retry count
+		var retryCount int
+		err = tx.QueryRow(`SELECT retry_count FROM transcode_jobs WHERE id = ?`, jobID).Scan(&retryCount)
+		if err != nil {
+			return fmt.Errorf("failed to get retry count: %w", err)
+		}
+
+		newRetryCount := retryCount + 1
+
+		if newRetryCount >= maxJobRetries {
+			// Max retries reached - mark as permanently failed
+			_, err = tx.Exec(`
+				UPDATE transcode_jobs
+				SET status = 'failed',
+				    error_message = ?,
+				    retry_count = ?,
+				    last_retry_at = CURRENT_TIMESTAMP,
+				    worker_id = '',
+				    updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, errorMsg, newRetryCount, jobID)
+			if err != nil {
+				return fmt.Errorf("failed to update job: %w", err)
+			}
+
+			// Permanently disable transcoding for this file
+			_, err = tx.Exec(`
+				UPDATE media_files
+				SET should_transcode = 0,
+				    updated_at = CURRENT_TIMESTAMP
+				WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+			`, jobID)
+			if err != nil {
+				return fmt.Errorf("failed to disable transcoding: %w", err)
+			}
+		} else {
+			// Retries remaining - requeue the job
+			_, err = tx.Exec(`
+				UPDATE transcode_jobs
+				SET status = 'queued',
+				    error_message = ?,
+				    retry_count = ?,
+				    last_retry_at = CURRENT_TIMESTAMP,
+				    worker_id = '',
+				    updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, errorMsg, newRetryCount, jobID)
+			if err != nil {
+				return fmt.Errorf("failed to requeue job: %w", err)
+			}
+		}
+
+		return tx.Commit()
+	})
+}
+
+// SkipJob marks a job as skipped and sets should_transcode=0 to prevent re-adding (with retry on busy)
 func (db *DB) SkipJob(jobID int64, reason string, transcodedSize int64) error {
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return retryOnBusy(func() error {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 
-	// Update job status
-	_, err = tx.Exec(`
-		UPDATE transcode_jobs
-		SET status = 'skipped',
-		    error_message = ?,
-		    transcoded_file_size_bytes = ?,
-		    worker_id = '',
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, reason, transcodedSize, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update job: %w", err)
-	}
+		// Update job status
+		_, err = tx.Exec(`
+			UPDATE transcode_jobs
+			SET status = 'skipped',
+			    error_message = ?,
+			    transcoded_file_size_bytes = ?,
+			    worker_id = '',
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, reason, transcodedSize, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to update job: %w", err)
+		}
 
-	// Mark the media file as not needing transcoding (prevents re-adding)
-	_, err = tx.Exec(`
-		UPDATE media_files
-		SET should_transcode = 0,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
-	`, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update media file: %w", err)
-	}
+		// Mark the media file as not needing transcoding (prevents re-adding)
+		_, err = tx.Exec(`
+			UPDATE media_files
+			SET should_transcode = 0,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+		`, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to update media file: %w", err)
+		}
 
-	return tx.Commit()
+		return tx.Commit()
+	})
 }
 
-// PauseJob pauses a running job
+// PauseJob pauses a running job (with retry on busy)
 func (db *DB) PauseJob(jobID int64) error {
-	_, err := db.conn.Exec(`
-		UPDATE transcode_jobs
-		SET status = 'paused', worker_id = '', updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, jobID)
-
-	return err
+	return retryOnBusy(func() error {
+		_, err := db.conn.Exec(`
+			UPDATE transcode_jobs
+			SET status = 'paused', worker_id = '', updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, jobID)
+		return err
+	})
 }
 
-// ResumeJob resumes a paused job
+// ResumeJob resumes a paused job (with retry on busy)
 func (db *DB) ResumeJob(jobID int64) error {
-	_, err := db.conn.Exec(`
-		UPDATE transcode_jobs
-		SET status = 'queued', updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, jobID)
-
-	return err
+	return retryOnBusy(func() error {
+		_, err := db.conn.Exec(`
+			UPDATE transcode_jobs
+			SET status = 'queued', updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, jobID)
+		return err
+	})
 }
 
-// CancelJob cancels a job, marks the media file to not transcode, and deletes the job
+// CancelJob cancels a job, marks the media file to not transcode, and deletes the job (with retry on busy)
 func (db *DB) CancelJob(jobID int64) error {
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return retryOnBusy(func() error {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 
-	// Mark the media file as not needing transcoding (prevents re-adding)
-	_, err = tx.Exec(`
-		UPDATE media_files
-		SET should_transcode = 0,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
-	`, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update media file: %w", err)
-	}
+		// Mark the media file as not needing transcoding (prevents re-adding)
+		_, err = tx.Exec(`
+			UPDATE media_files
+			SET should_transcode = 0,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+		`, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to update media file: %w", err)
+		}
 
-	// Delete the job record
-	_, err = tx.Exec(`DELETE FROM transcode_jobs WHERE id = ?`, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to delete job: %w", err)
-	}
+		// Delete the job record
+		_, err = tx.Exec(`DELETE FROM transcode_jobs WHERE id = ?`, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to delete job: %w", err)
+		}
 
-	return tx.Commit()
+		return tx.Commit()
+	})
 }
 
-// KillJob immediately cancels a job, marks the media file to not transcode, and deletes the job
+// KillJob immediately cancels a job, marks the media file to not transcode, and deletes the job (with retry on busy)
 // Unlike CancelJob, this forces termination regardless of state
 func (db *DB) KillJob(jobID int64) error {
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return retryOnBusy(func() error {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 
-	// Check if job exists and is not already terminated
-	var count int
-	err = tx.QueryRow(`
-		SELECT COUNT(*) FROM transcode_jobs
-		WHERE id = ? AND status NOT IN ('completed', 'failed', 'canceled', 'skipped')
-	`, jobID).Scan(&count)
-	if err != nil {
-		return err
-	}
-	if count == 0 {
-		return fmt.Errorf("job not found or already terminated")
-	}
+		// Check if job exists and is not already terminated
+		var count int
+		err = tx.QueryRow(`
+			SELECT COUNT(*) FROM transcode_jobs
+			WHERE id = ? AND status NOT IN ('completed', 'failed', 'canceled', 'skipped')
+		`, jobID).Scan(&count)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return fmt.Errorf("job not found or already terminated")
+		}
 
-	// Mark the media file as not needing transcoding (prevents re-adding)
-	_, err = tx.Exec(`
-		UPDATE media_files
-		SET should_transcode = 0,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
-	`, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to update media file: %w", err)
-	}
+		// Mark the media file as not needing transcoding (prevents re-adding)
+		_, err = tx.Exec(`
+			UPDATE media_files
+			SET should_transcode = 0,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = (SELECT media_file_id FROM transcode_jobs WHERE id = ?)
+		`, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to update media file: %w", err)
+		}
 
-	// Delete the job record
-	_, err = tx.Exec(`DELETE FROM transcode_jobs WHERE id = ?`, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to delete job: %w", err)
-	}
+		// Delete the job record
+		_, err = tx.Exec(`DELETE FROM transcode_jobs WHERE id = ?`, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to delete job: %w", err)
+		}
 
-	return tx.Commit()
+		return tx.Commit()
+	})
 }
 
 // DeleteJob permanently deletes a job from the database
