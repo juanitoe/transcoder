@@ -57,9 +57,10 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Limit connection pool to reduce contention
-	conn.SetMaxOpenConns(1) // SQLite works best with single writer
-	conn.SetMaxIdleConns(1)
+	// Limit connection pool but allow some concurrency for reads
+	// SQLite WAL mode allows one writer + multiple readers
+	conn.SetMaxOpenConns(4)
+	conn.SetMaxIdleConns(2)
 
 	// Try to enable WAL mode for better concurrency
 	// If it fails, continue with default journal mode (DELETE)

@@ -6,7 +6,7 @@ import "fmt"
 const (
 	Major = 1
 	Minor = 2
-	Patch = 2
+	Patch = 3
 )
 
 // Build information - set via ldflags at build time
